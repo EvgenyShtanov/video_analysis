@@ -83,6 +83,8 @@ long double estimate_integral_under_contour(QImage const& img, QVector<int> indi
 	return sum;
 }
 
+
+
 /**
 */
 unsigned int intersection_area(QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
@@ -212,6 +214,48 @@ int I_fly_object_classifier::append_template(QImage img, int model_id, float ang
 		// qSort( templates_param_vector.begin(), templates_param_vector.end(), compare_wh_ratio);
 	return 0;
 }
+
+int I_fly_object_classifier::append_template_const_height(QImage img, int model_id, float angleX, float angleY, float angleZ) {
+	img = rotate_to_horizontal (img); // rotate by eigenvalues
+		
+	QRect rect = find_non_zero_rect (img);
+	img = img.copy (rect);
+
+	double scale = (double) COMMON_HEIGHT / (double) img.height ();
+	QImage scaled_img = im_scale_c (img, scale); /////
+	scaled_img.save (QString ("D:/projects/TOUCH/fly_run/temp/scaled/t_%1_%2_%3.bmp").arg (angleX).arg (angleY).arg (angleZ) );
+			
+	unsigned int cur_contour_length = 0;
+	unsigned int cur_compressed_obj_length = 0;
+	unsigned int contour_shift = 0;
+	unsigned int compressed_obj_shift = 0;
+	int tid = templates_param_hash.size (); // id of template
+	if (UseContour) {
+		// extract contour and compress (from sparse to compact representation) and append compressed contour
+		qv_contour_array.append (create_contour_and_compress (scaled_img) ); // extract and append
+			
+		cur_contour_length = qv_contour_array.last ().size ();
+		if (templates_param_hash.empty () )
+			contour_shift = 0;
+		else
+			contour_shift = templates_param_hash.value (tid-1).contour_shift + templates_param_hash.value (tid-1).contour_length;
+	}
+	if (UseIntensity) {
+		// compress (from sparse to compact representation) and append compressed template // store object only 
+		qv_object_array.append (compress_sparse_image (scaled_img) );
+		cur_compressed_obj_length = qv_object_array.last ().size ();
+		if (templates_param_hash.empty () )
+			compressed_obj_shift = 0;
+		else
+			compressed_obj_shift = templates_param_hash.value (tid-1).object_shift + templates_param_hash.value (tid-1).compressed_obj_length;
+	}
+	// append to vector of templates
+	templates_param_hash.insert (tid, template_params (tid, angleX, angleY, angleZ, 
+		scaled_img.width (), scaled_img.height (), cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ) );
+		
+	return 0;
+}
+
 
 fly_object_classifier::fly_object_classifier(){
 	set_default_params();
@@ -689,6 +733,12 @@ int cu_fly_object_classifier::allocate_memory_on_GPU(bool realloc_force) { // al
 				clearMemory( ); return ErrorAllocateMemoryGPU;
 			}
 			printf("cu_energy_table_n_best - allocated, size = %d\n", n_best_elements);
+			mem2d = cudaMalloc( (void**)&cu_best_ids, sizeof (int)*n_best_elements);
+			if( mem2d != cudaSuccess ) {
+				printf("Error:cudaMalloc((void**)&cu_best_ids, sizeof(int)*n_best_elements):Error message=%s\n", cudaGetErrorString(mem2d));
+				clearMemory( ); return ErrorAllocateMemoryGPU;
+			}
+			printf("cu_best_ids - allocated, size = %d\n", n_best_elements);
 		}
 	}
 	this->is_memory_allocated = true;
@@ -797,43 +847,49 @@ int cu_fly_object_classifier::copy_data_to_GPU(bool recopy_force) {
 
 int cu_fly_object_classifier::estimate_similarity(QImage const& img) { // recognition
 	// Cover GPU memory operation to support CPU only interface
-	if( ! this->is_memory_allocated) {this->allocate_memory_on_GPU();} 
+	if( ! this->is_memory_allocated) {this->allocate_memory_on_GPU ();} 
 	if( ! this->is_data_copyed) {this->copy_data_to_GPU();}
 	
-	QVector<float> temp_energies(n_best_elements); // store n best energies
+	QVector<float> temp_energies (n_best_elements); // store n best energies
 	// Rotate input image according eigenvalues
-	QImage img_eig = rotate_to_horizontal(img);
-	QRect rect = find_non_zero_rect(img_eig); img_eig = img_eig.copy(rect);
+	QImage img_eig = rotate_to_horizontal (img);
+	QRect rect = find_non_zero_rect (img_eig); 
+	img_eig = img_eig.copy (rect);
+	
+	double scale = (double) COMMON_HEIGHT / (double) img_eig.height ();
+	QImage input_scaled_img = im_scale_c (img_eig, scale);
+	input_scaled_img.save ("input_scaled.bmp");
+
 	// Find nearest templates by w/h ratio
-	QVector<int> work_templates = get_nearest_templates (templates_param_hash, img_eig.size(), template_similarity);
-	printf("get_nearest_templates - ok!, work_templates.size() = %d\n", work_templates.size() );
+	QVector<int> work_templates = get_nearest_templates (templates_param_hash, input_scaled_img.size(), template_similarity);
+	printf("get_nearest_templates - ok!, work_templates.size() = %d\n", work_templates.size () );
 
 	cudaError_t mem2d;
 	// Allocate and copy memory on GPU for indices of fittest and for returning energy values
-	mem2d = cudaMalloc( (void**)&cu_indices_of_fittest, sizeof(int)*(work_templates.size() ));
+	mem2d = cudaMalloc ( (void**)&cu_indices_of_fittest, sizeof (int)*(work_templates.size () ) );
 	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_indices_of_fittest, sizeof(int)*work_templates.size():Error message=%s\n", cudaGetErrorString(mem2d));
-		clearMemory( ); return -1;
+		printf("Error:cudaMalloc( (void**)&cu_indices_of_fittest, sizeof(int)*work_templates.size():Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory ( ); return -1;
 	}
-	printf("cu_indices_of_fittest - allocated, size = %d\n", work_templates.size() );
+	printf("cu_indices_of_fittest - allocated, size = %d\n", work_templates.size () );
 
-	mem2d = cudaMalloc( (void**)&cu_energy_table, sizeof(float)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r) ));
+	mem2d = cudaMalloc ( (void**)&cu_energy_table, sizeof (float)*(work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) ) );
 	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_energy_table, sizeof(float)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r):Error message=%s\n", cudaGetErrorString(mem2d));
-		clearMemory( ); return -1;
+		printf("Error:cudaMalloc( (void**)&cu_energy_table, sizeof(float)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r):Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory ( ); return -1;
 	}
-	printf("cu_energy_table - allocated, size = %d\n", work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r) );
+	printf("cu_energy_table - allocated, size = %d\n", work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) );
 	
-	mem2d = cudaMalloc( (void**)&cu_img_array, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ) );
+	mem2d = cudaMalloc ( (void**)&cu_img_array, sizeof(IMGTYPE)*(input_scaled_img.width() * input_scaled_img.height () ) );
 	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_img_array, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ):Error message=%s\n", cudaGetErrorString(mem2d));
-		clearMemory( ); return -1;
+		printf("Error:cudaMalloc( (void**)&cu_img_array, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ):Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory ( ); return -1;
 	}
-	printf("cu_img_array - allocated, size = %d\n", (img_eig.width() * img_eig.height() ) );
+	printf("cu_img_array - allocated, size = %d\n", (input_scaled_img.width () * input_scaled_img.height () ) );
 
-	mem2d = cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof(int) * work_templates.size(), cudaMemcpyHostToDevice);
+	mem2d = cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof (int) * work_templates.size (), cudaMemcpyHostToDevice);
 	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof(int) * work_templates.size(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString(mem2d) );
+		printf("Error:cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof(int) * work_templates.size(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString (mem2d) );
 		clearMemory( ); return -1;      
 	} ;
 	printf("cu_indices_of_fittest - copyed, size = %d\n", work_templates.size() );
@@ -842,21 +898,21 @@ int cu_fly_object_classifier::estimate_similarity(QImage const& img) { // recogn
 	else
 		printf("work_templates.data()==0\n");*/
 	IMGTYPE * img_array = 0;
-	img_array = new IMGTYPE[img_eig.width() * img_eig.height()];
-	if( convert_qimage_to_array( img_array, img_eig) ) return -1;
+	img_array = new IMGTYPE[input_scaled_img.width () * input_scaled_img.height ()];
+	if( convert_qimage_to_array( img_array, input_scaled_img) ) return -1;
 	if(!img_array) {
 		printf("img_array == 0;\n");
 		clearMemory( ); return -1;
 	}
-	mem2d = cudaMemcpy( cu_img_array, img_array, sizeof(IMGTYPE) * img_eig.width() * img_eig.height(), cudaMemcpyHostToDevice);
+	mem2d = cudaMemcpy( cu_img_array, img_array, sizeof(IMGTYPE) * input_scaled_img.width () * input_scaled_img.height (), cudaMemcpyHostToDevice);
 	if( mem2d != cudaSuccess ) {
 		printf("Error:cudaMemcpy( cu_img_array, img_array, sizeof(IMGTYPE) * img_eig.width() * img_eig.height(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString(mem2d) );
 		clearMemory( ); return -1;      
 	} ;
-	printf("cu_img_array - copyed, size = %d\n", img_eig.width() * img_eig.height() );
+	printf("cu_img_array - copyed, size = %d\n", input_scaled_img.width() * input_scaled_img.height() );
 	delete[] img_array;
 
-	unsigned int img_obj_area = areaBW(img_eig);
+	unsigned int img_obj_area = areaBW (input_scaled_img);
 	
 	int NUM_BLOCK_X = 1;
 	int NUM_BLOCK_Y = work_templates.size();
@@ -867,18 +923,32 @@ int cu_fly_object_classifier::estimate_similarity(QImage const& img) { // recogn
 	RunTimer.start ( ) ;
 
 	estimate_nicodim_metric_wrapper (NUM_BLOCK_X, NUM_BLOCK_Y, NUM_THREAD_X, NUM_THREAD_Y,
-		cu_img_array, img_eig.width (), img_eig.height (), img_obj_area, cu_object_array, cu_params_array, cu_indices_of_fittest, roi_w, roi_h, step_r, cu_energy_table, cu_energy_table_n_best, n_best_elements);
+		cu_img_array, input_scaled_img.width (), input_scaled_img.height (), img_obj_area,
+		cu_object_array, cu_params_array, cu_indices_of_fittest, roi_w, roi_h, step_r, 
+		cu_energy_table, cu_energy_table_n_best, cu_best_ids, n_best_elements);
 
 	fprintf (stdout, "Time of run func call = %lf seconds\n", double (RunTimer.elapsed( ) ) / 1000. ) ;
 
 	energy_table.resize (n_best_elements);
+	best_ids.resize (n_best_elements);
+
 	mem2d = cudaMemcpy (energy_table.data (), cu_energy_table_n_best, sizeof (float) * n_best_elements, cudaMemcpyDeviceToHost);
 	if (mem2d != cudaSuccess) {
 		printf ("Error:cudaMemcpy (energy_table.data (), cu_energy_table_n_best, sizeof (float) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString(mem2d) );
 		clearMemory ( ); return -1;      
 	} ;
+	mem2d = cudaMemcpy (best_ids.data (), cu_best_ids, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost);
+	if (mem2d != cudaSuccess) {
+		printf ("Error:cudaMemcpy (best_ids.data (), cu_best_ids, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString(mem2d) );
+		clearMemory ( ); return -1;      
+	} ;
 	printf ("energy_table - copyed back to CPU, size = %d\n", n_best_elements );
 	printf ("The result is %f\n", energy_table[0] );
+	int the_index = best_ids [0] / ( (2*roi_h/step_r)*(2*roi_w/step_r) );
+	printf("The index = %d", the_index);
+	int the_best_id = work_templates [ the_index ];
+	printf ("The id is %d\n", the_best_id );
+	printf ("Angles are: x = %f, y = %f, z = %d\n", templates_param_hash.value (the_best_id).angleX, templates_param_hash.value (the_best_id).angleY, 0 );
 
 	return 0;
 }

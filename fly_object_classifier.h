@@ -16,6 +16,7 @@
 #include "template_params.h"
 
 #define TEMPLATE_EPS_SIMILARITY 0.2
+#define COMMON_HEIGHT 32
 
 #define IMGTYPE float //float or double (float быстрее на CUDA) // тип данных изображений
 // #define IMGTYPE unsigned  char
@@ -25,7 +26,9 @@ extern "C" {
 	int estimate_nicodim_metric_wrapper(int NUM_BLOCK_X, int NUM_BLOCK_Y,
                          int NUM_THREAD_X, int NUM_THREAD_Y,
                          IMGTYPE *img, int w, int h, unsigned int img_obj_area,
-						 MAPTYPE*template_ar, template_params* t_params, int *ids_of_fittests, int RX, int RY, int step_r, float * energy_temp, float * out_energy_best, int num_of_best);
+						 MAPTYPE*template_ar, template_params* t_params, int *ids_of_fittests, 
+						 int RX, int RY, int step_r, 
+						 float * energy_temp, float * out_energy_best, int * best_indices, int num_of_best);
 };
 
 float normalize_integral(long double estim, float size, float alpha);
@@ -36,6 +39,7 @@ public:;
 	void set_default_params();
 	virtual ~I_fly_object_classifier(){};
 	virtual int append_template(QImage img, int model_id, float angleX, float angleY, float angleZ);
+	virtual int append_template_const_height(QImage img, int model_id, float angleX, float angleY, float angleZ);
 	virtual int estimate_similarity(QImage const& img)=0;
 public:; // SETTINGS
 	bool UseContour ; //!< At least one of this bool params must be true
@@ -106,6 +110,7 @@ private:;
 private:;
 	// return values
 	QVector<float> energy_table;
+	QVector<int> best_ids;
 	// QHash< QPair< int, int>, float>  energy_hash_table; // id, rotationZ, energy. Not multi hash: Unique key --> the only value
 	// GPU data
 	IMGTYPE *cu_img_array; // input image
@@ -115,6 +120,7 @@ private:;
 	int *cu_indices_of_fittest; // is being calculated on CPU and sent to GPU with input image array
 	float *cu_energy_table; // size is n_best_elements
 	float *cu_energy_table_n_best; // size is n_best_elements
+	int *cu_best_ids; // size is n_best_elements
 };
 
 #endif
