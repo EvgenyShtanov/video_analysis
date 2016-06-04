@@ -43,7 +43,7 @@ void CSceneRenderer::set_rotation(float angleX, float  angleY, float angleZ, boo
 	Performes rendering and return rendered image
 */
 QImage CSceneRenderer::get_image(int obj_val, bool use_obj, int shadow_val, bool use_shadow, int back_val) {
-	QImage img = wgt.get_color_image(obj_val, use_obj, shadow_val, use_shadow, back_val) ;
+	QImage img = wgt.get_color_image (obj_val, use_obj, shadow_val, use_shadow, back_val) ;
 
 	return img;
 }
