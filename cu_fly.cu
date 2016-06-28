@@ -122,21 +122,21 @@ extern "C" {
 };
 
 int 
-estimate_nicodim_metric_wrapper(int NUM_BLOCK_X, int NUM_BLOCK_Y,
+estimate_nicodim_metric_wrapper(int NUM_BLOCK_X,  int NUM_BLOCK_Y,
 								int NUM_THREAD_X, int NUM_THREAD_Y,
-								IMGTYPE			*img, 
-								IMGTYPE			*img_upsd, int w, int h, 
-								unsigned int	 img_obj_area,
-								MAPTYPE			*template_ar, 
-								template_params	*t_params, 
-								int				*ids_of_fittests, 
-								int				 RX, 
-								int				 RY, 
-								int				 step_r, 
-								float			*energy_temp, 
-								int				*gpu_if_rotated,
-								float			*out_energy_best, 
-								int				*gpu_best_ids, int num_of_best) 
+								IMGTYPE			 *img, 
+								IMGTYPE			 *img_upsd, int w, int h, 
+								unsigned int	  img_obj_area,
+								MAPTYPE			 *template_ar, 
+								template_params	 *t_params, 
+								int				 *ids_of_fittests, 
+								int				  RX, 
+								int				  RY, 
+								int				  step_r, 
+								float			 *energy_temp, 
+								int			 	 *gpu_if_rotated,
+								float			 *out_energy_best, 
+								int				 *gpu_best_ids, int num_of_best) 
 {
 	dim3 dimGrid  ( NUM_BLOCK_X , NUM_BLOCK_Y ) ;
 	dim3 dimBlock ( NUM_THREAD_X, NUM_THREAD_Y ) ;
@@ -394,12 +394,12 @@ calculate_nicodim_metric (IMGTYPE *pImg, int ImgW, int ImgH, unsigned int img_ob
 
 	int shiftX, shiftY ;
 
-	shiftX = (int) ( (float) ImgW/2 - (float)RX + (ix % (RX*2 / step_r) )*step_r - (float)t_w / 2 );
-	shiftY = (int) ( (float) ImgH/2 - (float)RY + (ix / (RX*2 / step_r) )*step_r - (float)t_h / 2 );
+	shiftX = (int) ((float) ImgW / 2 - (float) RX + (ix % (RX * 2 / step_r)) * step_r - (float) t_w / 2 );
+	shiftY = (int) ((float) ImgH / 2 - (float) RY + (ix / (RX * 2 / step_r)) * step_r - (float) t_h / 2 );
 
 	for( int i = 0 ; i < t_area; i++ ) {
-		int x = t_array [shift+i]%t_w ; // coords of contours elements in map SC
-		int y = t_array [shift+i]/t_w ;
+		int x = t_array [shift+i] % t_w ; // coords of contours elements in map SC
+		int y = t_array [shift+i] / t_w ;
 		if( ((shiftY+y)*ImgW+shiftX+x) > 0 && ((shiftY+y)*ImgW+shiftX+x) < ImgW*ImgH && (shiftY+y) < ImgH && shiftX+x < ImgW )
 			if( pImg [(shiftY+y)*ImgW+shiftX+x] > 0 )
 				Area_inter += 1;

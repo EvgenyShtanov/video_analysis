@@ -14,12 +14,28 @@
 #include "cuda_def.h"
 #include "cuda_base.h"
 #include "bits_base.h"
+#include "ocv_base.h"
+#include "c/c_invmoments.h"
+#include "c/c_img_data_types.h"
+// #include "ocv_qt.h"
+
+typedef unsigned long int ulong;
 
 #define EPS 0.001
 
 // compare functions for template_params structure by ratio of width and height
-bool compare_wh_ratio(const template_params &a1, const template_params &a2) {
+bool compare_wh_ratio (const template_params &a1, const template_params &a2) {
    return float(a1.w) / float(a1.h) < float(a2.w) / float(a2.h);
+}
+
+// Compare function for bit_mask_param structure by hamming distance between bitmasks
+bool compare_hamming_dist (const bit_mask_param &a1, const bit_mask_param &a2) {
+   return a1.ham_dist < a2.ham_dist;
+}
+
+// Compare function for hu_dist_param by Hu's distance between templates and input frame
+bool compare_hu_distance (const hu_dist_param &a1, const hu_dist_param &a2) {
+	return a1.hu_distance < a2.hu_distance;
 }
 
 /**
@@ -43,6 +59,7 @@ QVector<int> get_nearest_templates( QVector<template_params> params_vec, QSize i
 QVector<int> get_nearest_templates( QHash< int, template_params> params_hash, QSize img_size, float similarity ) {
 	QVector<int> ids;
 
+	// confine by w/h
 	foreach(template_params t_hash, params_hash)
 		if( float(t_hash.h) * float(img_size.height() ) > EPS ) {
 			if( qAbs(float(t_hash.w) / float(t_hash.h) - float(img_size.width()) / float(img_size.height() ) ) < similarity ) {
@@ -53,12 +70,119 @@ QVector<int> get_nearest_templates( QHash< int, template_params> params_hash, QS
 			printf ("Error: get_nearest_templates( QHash< int, template_params>, QSize, float) : Division by zero!\n");
 			printf ("params_vec[i].h = %d, img_size.height() = %d\n", t_hash.h, img_size.height() );
 		}
+
 	return ids;
 }
 
-long double estimate_integral_under_contour(QImage const& img, QVector<int> indices, int t_width) {
-	long double sum = 0;
+QVector<int> get_nearest_templates_hw_and_mask( QHash< int, template_params> params_hash, QSize img_size, QBitArray img_mask, float similarity ) {
+	QVector<int> ids_hw;
+	QVector<int> ids_final;
+	QVector<bit_mask_param> param_ar;
+	int amount_to_return = 150;
+
+	// confine by w/h
+	foreach(template_params t_hash, params_hash)
+		if( float(t_hash.h) * float(img_size.height() ) > EPS ) {
+			if( qAbs(float(t_hash.w) / float(t_hash.h) - float(img_size.width()) / float(img_size.height() ) ) < similarity ) {
+				ids_hw.push_back(t_hash.id);
+			}
+		}
+		else {
+			printf ("Error: get_nearest_templates( QHash< int, template_params>, QSize, float) : Division by zero!\n");
+			printf ("params_vec[i].h = %d, img_size.height() = %d\n", t_hash.h, img_size.height() );
+		}
+
+	// Confine by bit mask similarity
+	ulong img_bit_mask_arg_up = n_bits_to_arg (img_mask, 32);
+	// Replace upper part of mask by bottom one
+	for (int i=0; i < 32; ++i)
+		img_mask.setBit (i, img_mask.at (i+32));
+	ulong img_bit_mask_arg_down = n_bits_to_arg (img_mask, 32);
+
+	// Calc hamming dist for each confined template
+	for (int i = 0; i < ids_hw.size (); ++i) {
+		int ham_dist = 0;
+		ham_dist += hamming_dist (img_bit_mask_arg_up, params_hash.value (ids_hw[i]).bit_mask_arg_up);
+		ham_dist += hamming_dist (img_bit_mask_arg_down, params_hash.value (ids_hw[i]).bit_mask_arg_down);
+		printf ("ids_hw[%d] = %d, ham_dist = %d\n", i, ids_hw[i], ham_dist);
+		param_ar.append (bit_mask_param (ids_hw[i], ham_dist));
+	}
+
+	// Sort by hamming distance
+	qSort (param_ar.begin(), param_ar.end(), compare_hamming_dist);
+
+	amount_to_return = qMin (amount_to_return, ids_hw.size ());
+
+	// Get required amount of ids
+	for (int i=0; i < amount_to_return; ++i)
+		ids_final.append (param_ar[i].id);
 	
+	printf ("ids_final: ");
+	for (int i=0; i < amount_to_return; ++i)
+		printf ("%d ", ids_final[i]);
+
+	return ids_final;
+}
+
+QVector<int> get_nearest_templates_hw_hu (QHash<int, template_params> params_hash, QSize img_size, double *hu_moment_img, float similarity) {
+	printf ("get_nearest_templates_hw_hu\n");
+	QVector<int> ids_hw;
+	QVector<int> ids_final;
+	QVector<hu_dist_param> param_ar;
+	int amount_to_return = 250;
+
+	// confine by w/h
+	foreach (template_params t_hash, params_hash)
+		if (float (t_hash.h) * float (img_size.height ()) > EPS ) {
+			if (qAbs (float (t_hash.w) / float (t_hash.h) - float (img_size.width ()) / float (img_size.height ())) < similarity) {
+				ids_hw.push_back (t_hash.id);
+			}
+		}
+		else {
+			printf ("Error: get_nearest_templates (QHash<int, template_params>, QSize, float) : Division by zero!\n");
+			printf ("params_vec[i].h = %d, img_size.height() = %d\n", t_hash.h, img_size.height ());
+		}
+
+	// Confine by Hu's moments distance
+	for (int i = 0; i < ids_hw.size (); ++i) {
+		double hu_dist = 0.0;
+		hu_dist = hu_moment_distance2 (hu_moment_img, params_hash.value (ids_hw[i]).hu_moments, 2);
+		
+		/* printf ("templates moments: ");
+		for (int j=0; j < 7; ++j)
+			printf ("%f ", params_hash.value (ids_hw[i]).hu_moments[j]);
+		printf ("\n"); */
+
+		param_ar.append (hu_dist_param (ids_hw[i], hu_dist));
+	}
+	// printf ("param_ar size = %d\n", param_ar.size ());
+
+	// Sort by hu's distance
+	qSort (param_ar.begin (), param_ar.end (), compare_hu_distance);
+
+	amount_to_return = qMin (amount_to_return, ids_hw.size ());
+
+	// Get required amount of ids
+	for (int i=0; i < amount_to_return; ++i)
+		ids_final.append (param_ar[i].id);
+	
+	/* printf ("ids_final: ");
+	for (int i = 0; i < amount_to_return; ++i)
+		printf ("%d ", ids_final[i]); */
+
+	return ids_final;
+}
+
+/**
+ * Calculates Riemann sum under template indices on image img. It can be contour or filled object.
+ * \param[in] img - input rgb32 or indexed8 image
+ * \param[in] indices - indices of pixel in array representation of 2D template
+ * \param[in] t_width - width of template
+ * \return 
+ */
+long double estimate_integral_under_contour (QImage const& img, QVector<int> indices, int t_width) {
+	long double sum = 0;
+
 	for(int i=0; i < indices.size(); ++i) {
 		int x = indices[i] % t_width;
 		int y = indices[i] / t_width;
@@ -70,7 +194,17 @@ long double estimate_integral_under_contour(QImage const& img, QVector<int> indi
 	return sum;
 }
 
-long double estimate_integral_under_contour(QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
+/**
+ * Calculates Riemann sum under template's indices on image img. It can be contour or filled object.
+ * \param[in] img - input rgb32 or indexed8 image
+ * \param[in] indices - indices of pixel in array representation of 2D template
+ * \param[in] t_width - width of template
+ * \param[in] shift_x - shift of template relative to image in X dimension
+ * \param[in] shift_y - shift of template relative to image in Y dimension
+ * \return 
+ * Used in TOUCH dll
+ */
+long double estimate_integral_under_contour (QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
 	long double sum = 0;
 	
 	for(int i=0; i < indices.size(); ++i) {
@@ -87,8 +221,15 @@ long double estimate_integral_under_contour(QImage const& img, QVector<int> indi
 
 
 /**
-*/
-unsigned int intersection_area(QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
+ * Calculates number of non-zero elements in image under indices of template 
+ * \param[in] img - input rgb32 or indexed8 image
+ * \param[in] indices - indices of pixel in array representation of 2D template
+ * \param[in] t_width - width of template
+ * \param[in] shift_x - shift of template relative to image in X dimension
+ * \param[in] shift_y - shift of template relative to image in Y dimension
+ * Used in FLY dll
+ */
+unsigned int intersection_area (QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
 	unsigned int area = 0;
 
 	for(int i=0; i < indices.size(); ++i) {
@@ -103,12 +244,12 @@ unsigned int intersection_area(QImage const& img, QVector<int> indices, int t_wi
 }
 
 /**
-	QImage const& img - input BW image, QImage::Format_Indexed8
-	QVector<int> indices - object's indices in template
-	int t_width - width of original template image
-	int shift_x - shift relative to image coord sys
-	int shift_y
-*/
+ *	QImage const& img - input BW image, QImage::Format_Indexed8
+ *	QVector<int> indices - object's indices in template
+ *	int t_width - width of original template image
+ *	int shift_x - shift relative to image coord system in X
+ *	int shift_y - shift relative to image coord system in Y
+ */
 long int nikodim_distance(QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
 	// calc object area in input bw image
 	long int Area_object = areaBW(img);
@@ -123,7 +264,10 @@ long int nikodim_distance(QImage const& img, QVector<int> indices, int t_width, 
 	return NicodimDist;
 }
 
-long double weighted_full_sum(QImage const& img) {
+/**
+ * Compute sum of all elements in image and normalize by 512 
+ */
+long double weighted_full_sum (QImage const& img) {
 	long double sum = 0;
 
 	for(int i=0; i < img.height(); ++i) {
@@ -152,10 +296,10 @@ T min(T a, T b) {
 }
 
 void enhance_rectangle(QRect & rect, int margin, QRect boundaries) {
-	int left = max(0, rect.x() - margin);
-	int right = min(boundaries.width(), rect.width() + margin);
-	int top = max(0, rect.y() - margin);
-	int bottom = min(boundaries.height(), rect.height() + margin);
+	int left = std::max(0, rect.x() - margin);
+	int right = std::min(boundaries.width(), rect.width() + margin);
+	int top = std::max(0, rect.y() - margin);
+	int bottom = std::min(boundaries.height(), rect.height() + margin);
 
 	rect.setCoords(left,top,right,bottom);
 }
@@ -231,6 +375,7 @@ int I_fly_object_classifier::append_template_const_height (QImage img, int model
 	QImage scaled_img = im_scale_c (img, scale); /////
 	// scaled_img.save (QString ("D:/projects/TOUCH/fly_run/temp/scaled/t_%1_%2_%3.bmp").arg (angleX).arg (angleY).arg (angleZ) );
 			
+	ulong bit_mask_arg_up, bit_mask_arg_down;
 	unsigned int cur_contour_length = 0;
 	unsigned int cur_compressed_obj_length = 0;
 	unsigned int contour_shift = 0;
@@ -251,7 +396,7 @@ int I_fly_object_classifier::append_template_const_height (QImage img, int model
 		qv_object_array.append (compress_sparse_image (scaled_img) );
 
 		// Create bit mask
-		QBitArray mask = image_to_bits (scaled_img, 8, 8, 0.5);
+		QBitArray mask = image_to_bits (scaled_img, 8, 8, (float)BIT_MASK_DIFF);
 		
 		/* printf ("Mask as bit array:\n");
 		for (int i=0; i < 8; ++i) {
@@ -288,11 +433,69 @@ int I_fly_object_classifier::append_template_const_height (QImage img, int model
 	}
 	// append to vector of templates
 	templates_param_hash.insert (tid, template_params (tid, angleX, angleY, angleZ, 
-		scaled_img.width (), scaled_img.height (), cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ) );
+		scaled_img.width (), scaled_img.height (), bit_mask_arg_up, bit_mask_arg_down, cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ) );
 		
 	return 0;
 }
 
+int I_fly_object_classifier::append_template_const_height_hu (QImage img, int model_id, float angleX, float angleY, float angleZ) {
+	double tilt;
+	img = rotate_to_horizontal (img, &tilt); // rotate by eigenvalues
+	eig_tilts.push_back ((float) tilt);
+		
+	QRect rect = find_non_zero_rect (img);
+	img = img.copy (rect);
+
+	double scale = (double) COMMON_HEIGHT / (double) img.height ();
+	QImage scaled_img = im_scale_c (img, scale); /////
+	// scaled_img.save (QString ("D:/projects/TOUCH/fly_run/temp/scaled/t_%1_%2_%3.bmp").arg (angleX).arg (angleY).arg (angleZ) );
+			
+	ulong bit_mask_arg_up, bit_mask_arg_down;
+	unsigned int cur_contour_length = 0;
+	unsigned int cur_compressed_obj_length = 0;
+	unsigned int contour_shift = 0;
+	unsigned int compressed_obj_shift = 0;
+	int tid = templates_param_hash.size (); // id of template
+	double *hu_mom;
+	if (UseContour) {
+		// extract contour and compress (from sparse to compact representation) and append compressed contour
+		qv_contour_array.append (create_contour_and_compress (scaled_img) ); // extract and append
+			
+		cur_contour_length = qv_contour_array.last ().size ();
+		if (templates_param_hash.empty () )
+			contour_shift = 0;
+		else
+			contour_shift = templates_param_hash.value (tid-1).contour_shift + templates_param_hash.value (tid-1).contour_length;
+	}
+	if (UseIntensity) {
+		// compress (from sparse to compact representation) and append compressed template // store object only
+		qv_object_array.append (compress_sparse_image (scaled_img) );
+
+		ImgDataArray img_data_ar;
+		img_data_ar.data = scaled_img.bits ();
+		img_data_ar.w = scaled_img.width ();
+		img_data_ar.h = scaled_img.height ();
+		img_data_ar.bpl = scaled_img.bytesPerLine ();
+
+		hu_mom = hu_moments (&img_data_ar);
+		// printf ("%.20f %.20f %.20f %.20f %.20f %.20f %.20f\n", hu_mom[0], hu_mom[1], hu_mom[2], hu_mom[3], hu_mom[4], hu_mom[5], hu_mom[6]);
+		/* cv::Mat mat = qimage_to_ocv_mat (scaled_img);
+		imwrite( "Gray_Image.jpg", mat );
+		cv::Moments moments = cv::moments (mat);
+		cv::HuMoments (moments, hu_mom);*/
+
+		cur_compressed_obj_length = qv_object_array.last ().size ();
+		if (templates_param_hash.empty () )
+			compressed_obj_shift = 0;
+		else
+			compressed_obj_shift = templates_param_hash.value (tid-1).object_shift + templates_param_hash.value (tid-1).compressed_obj_length;
+	}
+	// append to vector of templates
+	templates_param_hash.insert (tid, template_params (tid, angleX, angleY, angleZ, 
+		scaled_img.width (), scaled_img.height (), bit_mask_arg_up, bit_mask_arg_down, hu_mom, cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ) );
+	printf ("ok5\n");
+	return 0;
+}
 
 fly_object_classifier::fly_object_classifier(){
 	set_default_params();
@@ -737,18 +940,24 @@ void cu_fly_object_classifier::clearMemory( ) {
 		cudaFree(cu_img_array);
 	if(cu_img_array_upsd)
 			cudaFree(cu_img_array_upsd);
-	if(cu_params_array)
+	if(cu_params_array) {
+		// for (int i = 0; i < templates_param_hash.size (); ++i)
+			// cudaFree (cu_params_array [i].hu_moments);
 		cudaFree(cu_params_array);
+	}
 	if(cu_object_array)
-			cudaFree(cu_object_array);
+		cudaFree(cu_object_array);
 	if(cu_indices_of_fittest)
 		cudaFree(cu_indices_of_fittest);
 	if(cu_energy_table)
-			cudaFree(cu_energy_table);
+		cudaFree(cu_energy_table);
 	if(cu_rotation)
-			cudaFree(cu_rotation);
+		cudaFree(cu_rotation);
 	if(cu_energy_table_n_best)
-			cudaFree(cu_energy_table_n_best);
+		cudaFree(cu_energy_table_n_best);
+	foreach (template_params t_p, templates_param_hash)
+		if (t_p.hu_moments != 0)
+			delete[] t_p.hu_moments;
 }
 
 int cu_fly_object_classifier::allocate_memory_on_GPU(bool realloc_force) { // allocates required memory on GPU and sets is_memory_allocated to true
@@ -764,12 +973,19 @@ int cu_fly_object_classifier::allocate_memory_on_GPU(bool realloc_force) { // al
 	}
 	else {
 		cudaError_t mem2d;
-		mem2d = cudaMalloc( (void**)&cu_params_array, sizeof(template_params)*templates_param_hash.size());
+		mem2d = cudaMalloc((void**) &cu_params_array, sizeof (template_params) * templates_param_hash.size ());
 		if( mem2d != cudaSuccess ) {
-			printf("Error:cudaMalloc((void**)&cu_params_array, sizeof(template_params)*templates_param_hash.size()):Error message=%s\n", cudaGetErrorString(mem2d));
-			clearMemory( ); return ErrorAllocateMemoryGPU;
+			printf("Error:cudaMalloc((void**)&cu_params_array, sizeof(template_params)*templates_param_hash.size()):Error message=%s\n", cudaGetErrorString (mem2d));
+			clearMemory (); return ErrorAllocateMemoryGPU;
 		}
-		printf("cu_params_array - allocated, size = %d, sizeof(template_params) = %d\n", templates_param_hash.size(), sizeof(template_params) );
+		/* for (int i = 0; i < 7; ++i) {
+			mem2d = cudaMalloc ((void**) &(cu_params_array[i].hu_moments), sizeof (double)*7);
+			if( mem2d != cudaSuccess ) {
+				printf("Error:cudaMalloc( (void**)&cu_params_array->hu_moments, sizeof(double)*7):Error message=%s\n", cudaGetErrorString (mem2d));
+				clearMemory( ); return ErrorAllocateMemoryGPU;
+			}
+		} */
+		printf ("cu_params_array - allocated, size = %d, sizeof(template_params) = %d\n", templates_param_hash.size (), sizeof (template_params));
 		if(UseIntensity) {
 			// check
 			if(templates_param_hash.size () != qv_object_array.size () ) {
@@ -778,28 +994,28 @@ int cu_fly_object_classifier::allocate_memory_on_GPU(bool realloc_force) { // al
 			}
 			template_params t_temp = templates_param_hash.value (qv_object_array.size()-1);
 			int size_of_obj_array = t_temp.object_shift + t_temp.compressed_obj_length;
-			mem2d = cudaMalloc( (void**) &cu_object_array, sizeof (MAPTYPE)*size_of_obj_array);
+			mem2d = cudaMalloc ((void**) &cu_object_array, sizeof (MAPTYPE) * size_of_obj_array);
 			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc((void**)&cu_object_array, sizeof(MAPTYPE)*qv_object_array.size()):Error message=%s\n", cudaGetErrorString(mem2d));
+				printf("Error:cudaMalloc ((void**)&cu_object_array, sizeof(MAPTYPE)*qv_object_array.size()):Error message=%s\n", cudaGetErrorString (mem2d));
 				clearMemory( ); return ErrorAllocateMemoryGPU;
 			}
 			printf("cu_object_array - allocated, size = %d\n", size_of_obj_array);
-			mem2d = cudaMalloc( (void**)&cu_energy_table_n_best, sizeof(float)*n_best_elements);
+			mem2d = cudaMalloc ((void**) &cu_energy_table_n_best, sizeof (float) * n_best_elements);
 			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc((void**)&cu_energy_table_n_best, sizeof(float)*n_best_elements):Error message=%s\n", cudaGetErrorString(mem2d));
-				clearMemory( ); return ErrorAllocateMemoryGPU;
+				printf("Error:cudaMalloc((void**)&cu_energy_table_n_best, sizeof(float)*n_best_elements):Error message=%s\n", cudaGetErrorString (mem2d));
+				clearMemory (); return ErrorAllocateMemoryGPU;
 			}
 			printf("cu_energy_table_n_best - allocated, size = %d\n", n_best_elements);
-			mem2d = cudaMalloc( (void**)&cu_best_ids, sizeof (int)*n_best_elements);
+			mem2d = cudaMalloc ((void**) &cu_best_ids, sizeof (int) * n_best_elements);
 			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc((void**)&cu_best_ids, sizeof(int)*n_best_elements):Error message=%s\n", cudaGetErrorString(mem2d));
-				clearMemory( ); return ErrorAllocateMemoryGPU;
+				printf("Error:cudaMalloc((void**)&cu_best_ids, sizeof(int)*n_best_elements):Error message=%s\n", cudaGetErrorString (mem2d));
+				clearMemory (); return ErrorAllocateMemoryGPU;
 			}
 			printf("cu_best_ids - allocated, size = %d\n", n_best_elements);
 		}
 	}
 	this->is_memory_allocated = true;
-	printf("is_memory_allocated = true\n");
+	printf ("is_memory_allocated = true\n");
 	return 0;
 }
 
@@ -913,6 +1129,7 @@ int cu_fly_object_classifier::copy_data_to_GPU(bool recopy_force) {
 static int iter_counter = 0;
 
 int cu_fly_object_classifier::estimate_similarity (QImage const& img) { // recognition
+	// printf ("cu_fly_object_classifier::estimate_similarity\n");
 	if (img.width () == 0 || img.height () == 0) {
 		printf ("Error: cu_fly_object_classifier::estimate_similarity: empty input image\n");
 		clearMemory ();
@@ -938,6 +1155,16 @@ int cu_fly_object_classifier::estimate_similarity (QImage const& img) { // recog
 
 	double scale = (double) COMMON_HEIGHT / (double) img_eig.height ();
 	QImage input_scaled_img = im_scale_c (img_eig, scale);
+	// QBitArray img_mask = image_to_bits (input_scaled_img, 8, 8, (float)BIT_MASK_DIFF);
+	ImgDataArray img_data_ar;
+	img_data_ar.data = input_scaled_img.bits ();
+	img_data_ar.w = input_scaled_img.width ();
+	img_data_ar.h = input_scaled_img.height ();
+	img_data_ar.bpl = input_scaled_img.bytesPerLine ();
+
+	double *hu_mom_img = hu_moments (&img_data_ar);
+	// printf ("%.20f %.20f %.20f %.20f %.20f %.20f %.20f", hu_mom_img[0], hu_mom_img[1], hu_mom_img[2], hu_mom_img[3], hu_mom_img[4], hu_mom_img[5], hu_mom_img[6]);
+
 	// input_scaled_img.save ("temp/input_scaled.bmp");
 
 	// test temp!
@@ -947,10 +1174,13 @@ int cu_fly_object_classifier::estimate_similarity (QImage const& img) { // recog
 
 	// Cover GPU memory operation to support CPU only interface
 	if( ! this->is_memory_allocated) {this->allocate_memory_on_GPU ();} 
-	if( ! this->is_data_copyed) {this->copy_data_to_GPU();}
+	if( ! this->is_data_copyed) {this->copy_data_to_GPU ();}
 
 	// Find nearest templates by w/h ratio
-	QVector<int> work_templates = get_nearest_templates (templates_param_hash, input_scaled_img.size(), template_similarity);
+	// QVector<int> work_templates = get_nearest_templates (templates_param_hash, input_scaled_img.size(), template_similarity);
+	// QVector<int> work_templates = get_nearest_templates_hw_and_mask (templates_param_hash, input_scaled_img.size(), img_mask, template_similarity);
+	QVector<int> work_templates = get_nearest_templates_hw_hu (templates_param_hash, input_scaled_img.size(), hu_mom_img, template_similarity);
+	delete[] hu_mom_img;
 	// printf("get_nearest_templates - ok!, work_templates.size() = %d\n", work_templates.size () );
 
 	cudaError_t mem2d;

@@ -1,5 +1,5 @@
-#ifndef FLY_OBJECT_CLASSIFIER_H
-#define FLY_OBJECT_CLASSIFIER_H
+#ifndef FLY_OBJECT_CLASSIFIER_H_
+#define FLY_OBJECT_CLASSIFIER_H_
 
 #include <QImage>
 #include <QString>
@@ -16,6 +16,7 @@
 #include "template_params.h"
 
 #define TEMPLATE_EPS_SIMILARITY 0.2
+#define BIT_MASK_DIFF 0.1
 #define COMMON_HEIGHT 16
 
 #define IMGTYPE float //float or double (float быстрее на CUDA) // тип данных изображений
@@ -41,6 +42,7 @@ public:;
 	virtual ~I_fly_object_classifier (){};
 	virtual int append_template (QImage img, int model_id, float angleX, float angleY, float angleZ);
 	virtual int append_template_const_height (QImage img, int model_id, float angleX, float angleY, float angleZ);
+	virtual int append_template_const_height_hu (QImage img, int model_id, float angleX, float angleY, float angleZ);
 	virtual int estimate_similarity(QImage const& img)=0;
 	QVector<MAPTYPE> get_contour (int id) {return qv_contour_array [id];}
 	QVector<MAPTYPE> get_object (int id) {return qv_object_array [id];}
@@ -61,7 +63,6 @@ protected:;
 	QVector<QVector<MAPTYPE> > qv_contour_array; // array of compressed  contours. Position of contour's pixel == number*shift_array[number]
 	QVector<QVector<MAPTYPE> > qv_object_array; // array of compressed objects. Position of object's pixel == number*shift_array[number]
 	QVector<float> eig_tilts; // temporary option // must be deleted!
-	unsigned long int bit_mask_arg_up, bit_mask_arg_down;
 };
 
 // CPU realization
@@ -87,8 +88,8 @@ private:;
 	// internal values
 	QVector<QImage> templates_vector; // if UseIntensity is true // not compressed objects usage version
 	// return values
-	QHash<int, QPair<int, float>  >  energy_map; // id, rotationZ, energy. Multi hash: Unique key --> multiple values. Deprecated
-	QHash< QPair< int, int>, float>  energy_hash_table; // id, rotationZ, energy. Not multi hash: Unique key --> the only value
+	QHash<int, QPair<int, float>  > energy_map; // id, rotationZ, energy. Multi hash: Unique key --> multiple values. Deprecated
+	QHash< QPair< int, int>, float> energy_hash_table; // id, rotationZ, energy. Not multi hash: Unique key --> the only value
 };
 
 // GPU realization
@@ -99,7 +100,6 @@ append_template - arbitrary num of calls
 allocate_memory_on_GPU - only once
 copy_data_to_GPU - only once
 estimate_similarity - arbitrary num of calls
-
 */
 class TOUCH_DLL cu_fly_object_classifier : public I_fly_object_classifier {
 public:;
@@ -123,16 +123,17 @@ private:;
 	QVector<int> best_ids;
 	QVector<int> if_rotated;
 	// QHash< QPair< int, int>, float>  energy_hash_table; // id, rotationZ, energy. Not multi hash: Unique key --> the only value
+
 	// GPU data
-	IMGTYPE *cu_img_array; // input image
-	IMGTYPE *cu_img_array_upsd; // input image turned upside down, rotated by 180 degrees
-	template_params* cu_params_array;
-	MAPTYPE* cu_object_array;
-	int *cu_indices_of_fittest; // is being calculated on CPU and sent to GPU with input image array
-	float *cu_energy_table; // size is work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) )
-	int *cu_rotation; // check if input image was rotated. Size is work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) )
-	float *cu_energy_table_n_best; // size is n_best_elements
-	int *cu_best_ids; // size is n_best_elements
+	IMGTYPE *cu_img_array; // Input image
+	IMGTYPE *cu_img_array_upsd; // Input image turned upside down, rotated by 180 degrees
+	template_params *cu_params_array;
+	MAPTYPE *cu_object_array;
+	int *cu_indices_of_fittest; // Calculated on CPU and sent to GPU with input image array
+	float *cu_energy_table; // Size is work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) )
+	int *cu_rotation; // Check if input image was rotated. Size is work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) )
+	float *cu_energy_table_n_best; // Size is n_best_elements
+	int *cu_best_ids; // Size is n_best_elements
 	double input_img_tilt;
 	bool is_upsd;
 };
