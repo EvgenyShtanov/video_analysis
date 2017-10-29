@@ -10,6 +10,7 @@
 #include "cuda_def.h"
 #include "ehMath.h"
 #include "template_params.h"
+#include "cu_algorithms.cuh"
 // #include "cu_img_base.cuh"
 
 #define COMMON_HEIGHT 16
@@ -42,7 +43,6 @@ estim_nicodim_metric_shared  (IMGTYPE			*img,
 							  float				*energy_temp, 
 							  int				*if_rotated);
 
-
 __device__ unsigned int 
 calculate_nicodim_metric (IMGTYPE		*img, int w, int h, 
 						  unsigned int	 img_obj_area,
@@ -54,13 +54,13 @@ calculate_nicodim_metric (IMGTYPE		*img, int w, int h,
 						  int			 ix);
 
 __device__ unsigned int 
-calculate_nicodim_metric_shared (IMGTYPE		*img, int w, int h, 
-						  unsigned int	 img_obj_area,
-						  MAPTYPE		*template_ar, int t_w, int t_h, 
-						  unsigned int	 t_area, 
-						  int RX, int RY, 
-						  int			 step_r, 
-						  int			 ix);
+calculate_nicodim_metric_shared  (IMGTYPE		*img, int w, int h, 
+								  unsigned int	 img_obj_area,
+								  MAPTYPE		*template_ar, int t_w, int t_h, 
+								  unsigned int	 t_area, 
+								  int RX, int RY, 
+								  int			 step_r, 
+								  int			 ix);
 
 __device__ void 
 img_rotate_full (IMGTYPE	*img_out, 
@@ -89,36 +89,38 @@ find_min (float		*min_val,
 
 extern "C" {
 	int 
-	estimate_nicodim_metric_wrapper(int	NUM_BLOCK_X, int	NUM_BLOCK_Y,
-									int	NUM_THREAD_X, int	NUM_THREAD_Y,
-									IMGTYPE			*img, 
-									IMGTYPE			*img_upsd, int	w, int	 h, 
-									unsigned int		 img_obj_area,
-									MAPTYPE			*template_ar, 
-									template_params	*t_params, 
-									int				*ids_of_fittests,
-									int				 RX, int RY, 
-									int				 step_r, 
-									float				*energy_temp, 
-									int				*if_rotated, 
-									float				*out_energy_best, 
-									int				*gpu_best_ids, int				 num_of_best);
+	estimate_nicodim_metric_wrapper        (int	NUM_BLOCK_X, int	NUM_BLOCK_Y,
+											int	NUM_THREAD_X, int	NUM_THREAD_Y,
+											IMGTYPE			*img, 
+											IMGTYPE			*img_upsd, int	w, int	 h, 
+											unsigned int	 img_obj_area,
+											MAPTYPE			*template_ar, 
+											template_params	*t_params, 
+											int				*ids_of_fittests,
+											int				 RX, int RY, 
+											int				 step_r, 
+											float			*energy_temp, 
+											int				*if_rotated, 
+											float			*out_energy_best, 
+											int				*gpu_best_ids,
+											int				 num_of_best);
 
 	int 
 	estimate_nicodim_metric_wrapper_shared (int	NUM_BLOCK_X, int	NUM_BLOCK_Y,
 											int	NUM_THREAD_X, int	NUM_THREAD_Y,
 											IMGTYPE			*img, 
 											IMGTYPE			*img_upsd, int	w, int	 h, 
-											unsigned int		 img_obj_area,
+											unsigned int	 img_obj_area,
 											MAPTYPE			*template_ar, 
 											template_params	*t_params, 
 											int				*ids_of_fittests,
 											int				 RX, int RY, 
 											int				 step_r, 
-											float				*energy_temp, 
+											float			*energy_temp, 
 											int				*if_rotated, 
-											float				*out_energy_best, 
-											int				*gpu_best_ids, int				 num_of_best);
+											float			*out_energy_best, 
+											int				*gpu_best_ids, 
+											int				 num_of_best);
 };
 
 int 
@@ -138,10 +140,10 @@ estimate_nicodim_metric_wrapper(int NUM_BLOCK_X,  int NUM_BLOCK_Y,
 								float			 *out_energy_best, 
 								int				 *gpu_best_ids, int num_of_best) 
 {
-	dim3 dimGrid  ( NUM_BLOCK_X , NUM_BLOCK_Y ) ;
-	dim3 dimBlock ( NUM_THREAD_X, NUM_THREAD_Y ) ;
 #ifdef KERNEL_LAUNCH
-	// calc Nicodim metric
+	dim3 dimGrid  (NUM_BLOCK_X , NUM_BLOCK_Y);
+	dim3 dimBlock (NUM_THREAD_X, NUM_THREAD_Y);
+	// Calc Nicodim metric
 	estim_nicodim_metric<<<dimGrid, dimBlock>>> (img, img_upsd, w, h, img_obj_area,
 		template_ar, t_params, ids_of_fittests, RX, RY, step_r, energy_temp, gpu_if_rotated);
 
@@ -153,22 +155,12 @@ estimate_nicodim_metric_wrapper(int NUM_BLOCK_X,  int NUM_BLOCK_Y,
 		return ErrorCudaRun ;
 	} ;
 
-	/*img_rotate_full<<<1,1>>>(img,&w,&h,img,w,h,M_PI);
-	cudaError_t cu_sync_er = cudaDeviceSynchronize() ;
-	if( cu_sync_er != cudaSuccess ) {
-		printf("Error: img_rotate_full<<<1,1>>> , cu_sync_er: Error message=%s\n", cudaGetErrorString (cu_sync_er)) ;
-		return ErrorCudaRun ;
-	} ;*/
-	find_min<<<1,1>>> (out_energy_best, gpu_best_ids, gpu_if_rotated, energy_temp, NUM_BLOCK_Y*NUM_THREAD_X);
+	find_min<<<1,1>>> (out_energy_best, gpu_best_ids, gpu_if_rotated, energy_temp, NUM_BLOCK_Y * NUM_THREAD_X);
 	cu_sync_er = cudaDeviceSynchronize () ;
 	if( cu_sync_er != cudaSuccess ) {
-		printf ("Error: find_min<<<1,1>>> , cu_sync_er: Error message=%s\n", cudaGetErrorString (cu_sync_er) ) ;
+		printf ("Error: find_min<<<1,1>>> , cu_sync_er: Error message = %s\n", cudaGetErrorString (cu_sync_er)) ;
 		return ErrorCudaRun ;
 	} ;
-	// printf("gpu_best_ids [0] = %d\n", *gpu_best_ids);
-	// printf("NUM_BLOCK_Y = %d\n", NUM_BLOCK_Y);
-	// printf("ids_of_fittests [gpu_best_ids [0] ] = %d\n", ids_of_fittests [ *gpu_best_ids ]);
-	// *gpu_best_ids = ids_of_fittests [ *gpu_best_ids ];
 
 #else
 
@@ -197,7 +189,7 @@ estimate_nicodim_metric_wrapper_shared (int NUM_BLOCK_X, int NUM_BLOCK_Y,
 	dim3 dimGrid  ( NUM_BLOCK_X , NUM_BLOCK_Y ) ;
 	dim3 dimBlock ( NUM_THREAD_X, NUM_THREAD_Y ) ;
 #ifdef KERNEL_LAUNCH
-	// calc Nicodim metric
+	// Calc Nicodim metric
 	estim_nicodim_metric<<<dimGrid, dimBlock>>> (img, img_upsd, w, h, img_obj_area,
 		template_ar, t_params, ids_of_fittests, RX, RY, step_r, energy_temp, gpu_if_rotated);
 
@@ -209,23 +201,12 @@ estimate_nicodim_metric_wrapper_shared (int NUM_BLOCK_X, int NUM_BLOCK_Y,
 		return ErrorCudaRun ;
 	} ;
 
-	/*img_rotate_full<<<1,1>>>(img,&w,&h,img,w,h,M_PI);
-	cudaError_t cu_sync_er = cudaDeviceSynchronize() ;
-	if( cu_sync_er != cudaSuccess ) {
-		printf("Error: img_rotate_full<<<1,1>>> , cu_sync_er: Error message=%s\n", cudaGetErrorString (cu_sync_er)) ;
-		return ErrorCudaRun ;
-	} ;*/
 	find_min<<<1,1>>> (out_energy_best, gpu_best_ids, gpu_if_rotated, energy_temp, NUM_BLOCK_Y*NUM_THREAD_X);
 	cu_sync_er = cudaDeviceSynchronize () ;
 	if( cu_sync_er != cudaSuccess ) {
 		printf ("Error: find_min<<<1,1>>> , cu_sync_er: Error message=%s\n", cudaGetErrorString (cu_sync_er) ) ;
 		return ErrorCudaRun ;
 	} ;
-	// printf("gpu_best_ids [0] = %d\n", *gpu_best_ids);
-	// printf("NUM_BLOCK_Y = %d\n", NUM_BLOCK_Y);
-	// printf("ids_of_fittests [gpu_best_ids [0] ] = %d\n", ids_of_fittests [ *gpu_best_ids ]);
-	// *gpu_best_ids = ids_of_fittests [ *gpu_best_ids ];
-
 #else
 
 #endif
@@ -233,8 +214,9 @@ estimate_nicodim_metric_wrapper_shared (int NUM_BLOCK_X, int NUM_BLOCK_Y,
 	return 0;
 }
 
+
 __global__ void 
-estim_nicodim_metric(IMGTYPE			*img, 
+estim_nicodim_metric (IMGTYPE			*img, 
 		 			 IMGTYPE			*img_upsd, int w, int h, 
 					 unsigned int		 img_obj_area,
  					 MAPTYPE			*template_ar, 
@@ -248,47 +230,28 @@ estim_nicodim_metric(IMGTYPE			*img,
 	//-- Block and thread indices
 	int by = blockIdx.y ; // 0 .. work_templates.size()
 	int tx = threadIdx.x ; // 0 .. (2*roi_h/step_r)*(2*roi_w/step_r)
-	int bx = blockIdx.x ; // 1
-	// int DBx = blockDim.x ; // (2*roi_h/step_r)*(2*roi_w/step_r)
-	// int ix = bx*DBx + tx ;  // 
+	// int bx = blockIdx.x ; // 1
 
-	int id = ids_of_fittests [by];
-	// calculate metric on img using indices of the fittest and store each result in out_energy_t
-	int current_index = by * (2*RX / step_r) * (2*RY / step_r) + tx;
+	int id = ids_of_fittests[by];
+	// Calculate metric on img using indices of the fittest and store each result in out_energy_t
+	int current_index = by * (2 * RX / step_r) * (2 * RY / step_r) + tx;
 	energy_temp[current_index] = 
 		(float) calculate_nicodim_metric (img, w, h, img_obj_area, 
-		template_ar, t_params[id].w, t_params[id].h, t_params[id].object_shift, 
+		template_ar, t_params[id].w, COMMON_HEIGHT, t_params[id].object_shift, 
 		t_params[id].compressed_obj_length, RX, RY, step_r, tx) ; //  / t_params [id].compressed_obj_length;
 	
 	cudaError_t cu_sync_er = cudaDeviceSynchronize ();
 	if( cu_sync_er != cudaSuccess ) {
 		printf("Error: energy_temp [by * (2*RX / step_r) * (2*RY / step_r) + tx] = (float) calculate_nicodim_metric: Error message=%s\n", 
-			cudaGetErrorString (cu_sync_er) ) ;
+			cudaGetErrorString (cu_sync_er)) ;
 	} ;
 
-	/* IMGTYPE* img_t = new IMGTYPE [w*h];
-	
-	dim3 dimGrid  ( 1, w ) ;
-	dim3 dimBlock ( h / 2, 1 ) ;
-	img_turn_upsd<<<dimGrid, dimBlock>>> (img_t, img, w, h);
-	
-	cu_sync_er = cudaDeviceSynchronize ();
-	if( cu_sync_er != cudaSuccess ) {
-		printf("Error: img_turn_upsd<<<dimGrid, dimBlock>>> (img_t, img, w, h): Error message=%s\n", 
-			cudaGetErrorString (cu_sync_er) ) ;
-	} ;
-
-	delete[] img_t;*/
-
-	// rotate img by 180 dgree 
-	// img_rotate_full(img,&w,&h,img,w,h,M_PI);
-	// repeat calculation
+	// Repeat calculation
 	float energy_temp2 = 
-		(float)calculate_nicodim_metric (img_upsd, w, h, img_obj_area, 
-		template_ar, t_params[id].w, t_params[id].h, t_params[id].object_shift, 
-		t_params[id].compressed_obj_length, RX, RY, step_r, tx);
-	// replace previous energy value by second calculated if needed
-	// energy_temp[by*RX*RY + tx] = energy_temp[by*RX*RY + tx] < energy_temp2 ? energy_temp[by*RX*RY + tx] : energy_temp2;
+		(float) calculate_nicodim_metric (img_upsd, w, h, img_obj_area, 
+										  template_ar, t_params[id].w, COMMON_HEIGHT, t_params[id].object_shift, 
+										  t_params[id].compressed_obj_length, RX, RY, step_r, tx);
+	// Replace previous energy value by second calculated if needed
 	if (energy_temp[current_index] < energy_temp2) {
 		if_rotated[current_index] = 0;
 	}
@@ -316,7 +279,7 @@ estim_nicodim_metric_shared (IMGTYPE			*img,
 	//-- Block and thread indices
 	int by = blockIdx.y ; // 0 .. work_templates.size()
 	int tx = threadIdx.x ; // 0 .. (2*roi_h/step_r)*(2*roi_w/step_r)
-	int bx = blockIdx.x ; // 1
+	// int bx = blockIdx.x ; // 1
 	// int DBx = blockDim.x ; // (2*roi_h/step_r)*(2*roi_w/step_r)
 	// int ix = bx*DBx + tx ;  // 
 
@@ -331,24 +294,20 @@ estim_nicodim_metric_shared (IMGTYPE			*img,
 	}
 	
 	int id = ids_of_fittests [by];
-	int t_h = t_params[id].h;
 	int t_w = t_params[id].w;
 	int t_shift = t_params[id].object_shift;
-	// copy data to buffer
-	for (int i = 0; i < t_h; ++i) {
+	// Copy data to buffer
+	for (int i = 0; i < COMMON_HEIGHT; ++i) {
 		for (int j = 0; j < t_w; ++j)
 		cu_template_buffer[i * COMMON_HEIGHT * 4 + j] = template_ar[t_shift + i * t_w + j];
 	}
-
-	// synchronisation
 	__syncthreads ();
 
-
-	// calculate metric on img using indices of the fittest and store each result in out_energy_t
+	// Calculate metric on img using indices of the fittest and store each result in out_energy_t
 	int current_index = by * (2 * RX / step_r) * (2 * RY / step_r) + tx;
 	energy_temp[current_index] = 
 		(float) calculate_nicodim_metric_shared (cu_img_buffer, w, h, img_obj_area, 
-		cu_template_buffer, t_params[id].w, t_params[id].h, 
+		cu_template_buffer, t_params[id].w, COMMON_HEIGHT, 
 		t_params[id].compressed_obj_length, RX, RY, step_r, tx) ; //  / t_params [id].compressed_obj_length;
 	
 	cudaError_t cu_sync_er = cudaDeviceSynchronize ();
@@ -357,28 +316,26 @@ estim_nicodim_metric_shared (IMGTYPE			*img,
 			cudaGetErrorString (cu_sync_er) ) ;
 	} ;
 
-	// copy data to buffer
+	// Copy data to buffer
 	for (int i = 0; i < h; ++i) {
 		for (int j=0; j < w; ++j)
 		cu_img_buffer[i*COMMON_HEIGHT*4 + j] = img_upsd[i*w + j];
 	}
-	// synchronisation
 	__syncthreads ();
 
-	// repeat calculation
+	// Repeat calculation
 	float energy_temp2 = 
 		(float)calculate_nicodim_metric_shared (cu_img_buffer, w, h, img_obj_area, 
-		cu_template_buffer, t_params[id].w, t_params[id].h, 
+		cu_template_buffer, t_params[id].w, COMMON_HEIGHT, 
 		t_params[id].compressed_obj_length, RX, RY, step_r, tx);
-	// replace previous energy value by second calculated if needed
-	// energy_temp[by*RX*RY + tx] = energy_temp[by*RX*RY + tx] < energy_temp2 ? energy_temp[by*RX*RY + tx] : energy_temp2;
-
+	
 	cu_sync_er = cudaDeviceSynchronize ();
 	if( cu_sync_er != cudaSuccess ) {
 		printf("Error: energy_temp2 [by * (2*RX / step_r) * (2*RY / step_r) + tx] = (float) calculate_nicodim_metric_shared: Error message=%s\n", 
 			cudaGetErrorString (cu_sync_er) ) ;
 	} ;
-
+	
+	// Replace previous energy value by second calculated if needed
 	if (energy_temp[current_index] < energy_temp2) {
 		if_rotated[current_index] = 0;
 	}
@@ -387,6 +344,7 @@ estim_nicodim_metric_shared (IMGTYPE			*img,
 		energy_temp[current_index] = energy_temp2;
 	}
 }
+
 
 __device__ unsigned int 
 calculate_nicodim_metric (IMGTYPE *pImg, int ImgW, int ImgH, unsigned int img_obj_area, MAPTYPE*t_array, int t_w, int t_h, unsigned int shift, unsigned int t_area, int RX, int RY, int step_r, int ix) {
@@ -398,10 +356,10 @@ calculate_nicodim_metric (IMGTYPE *pImg, int ImgW, int ImgH, unsigned int img_ob
 	shiftY = (int) ((float) ImgH / 2 - (float) RY + (ix / (RX * 2 / step_r)) * step_r - (float) t_h / 2 );
 
 	for( int i = 0 ; i < t_area; i++ ) {
-		int x = t_array [shift+i] % t_w ; // coords of contours elements in map SC
-		int y = t_array [shift+i] / t_w ;
-		if( ((shiftY+y)*ImgW+shiftX+x) > 0 && ((shiftY+y)*ImgW+shiftX+x) < ImgW*ImgH && (shiftY+y) < ImgH && shiftX+x < ImgW )
-			if( pImg [(shiftY+y)*ImgW+shiftX+x] > 0 )
+		int x = t_array [shift + i] % t_w ; // coords of contours elements in map SC
+		int y = t_array [shift + i] / t_w ;
+		if (((shiftY + y) * ImgW + shiftX + x) > 0 && ((shiftY + y) * ImgW + shiftX + x) < ImgW * ImgH && (shiftY + y) < ImgH && shiftX + x < ImgW )
+			if (pImg [(shiftY + y) * ImgW + shiftX + x] > 0 )
 				Area_inter += 1;
 	} ;
 
@@ -414,14 +372,15 @@ calculate_nicodim_metric_shared (IMGTYPE *pImg, int ImgW, int ImgH, unsigned int
 
 	int shiftX, shiftY ;
 
-	shiftX = (int) ( (float) ImgW/2 - (float)RX + (ix % (RX*2 / step_r) )*step_r - (float)t_w / 2 );
-	shiftY = (int) ( (float) ImgH/2 - (float)RY + (ix / (RX*2 / step_r) )*step_r - (float)t_h / 2 );
+	shiftX = (int) ( (float) ImgW / 2 - (float)RX + (ix % (RX * 2 / step_r) )*step_r - (float)t_w / 2 );
+	shiftY = (int) ( (float) ImgH / 2 - (float)RY + (ix / (RX * 2 / step_r) )*step_r - (float)t_h / 2 );
 
 	for( int i = 0 ; i < t_area; i++ ) {
 		int x = t_array [i]%t_w ; // coords of contours elements in map SC
 		int y = t_array [i]/t_w ;
-		if( ((shiftY+y)*COMMON_HEIGHT*4+shiftX+x) > 0 && ((shiftY+y)*COMMON_HEIGHT*4+shiftX+x) < COMMON_HEIGHT*4*ImgH && (shiftY+y) < ImgH && shiftX+x < COMMON_HEIGHT*4 )
-			if( pImg [(shiftY + y)*COMMON_HEIGHT*4 + shiftX + x] > 0 )
+		if( ((shiftY + y) * COMMON_HEIGHT * 4 + shiftX + x) > 0 && ((shiftY + y) * COMMON_HEIGHT * 4 + shiftX + x) <
+										COMMON_HEIGHT * 4 * ImgH && (shiftY + y) < ImgH && shiftX + x < COMMON_HEIGHT * 4)
+			if (pImg[(shiftY + y) * COMMON_HEIGHT*4 + shiftX + x] > 0 )
 				Area_inter += 1;
 	} ;
 
@@ -465,23 +424,23 @@ img_rotate_full(IMGTYPE *img_out, int *w_out,
 
 	for (int i = 0; i < *h_out ;++i) {
 		for (int j = 0; j < *w_out ;++j) {
-			double a = double (j-xo_out);
-			double b = double (i-yo_out);
-			int x = int (a*cosa - b*sina + double (xo_in) );
-			int y = int (a*sina + b*cosa + double (yo_in) );
+			double a = double (j - xo_out);
+			double b = double (i - yo_out);
+			int x = int (a * cosa - b * sina + double (xo_in));
+			int y = int (a * sina + b * cosa + double (yo_in));
 
 			if (x < w_in && x >= 0 && y >= 0 && y < h_in)
-				img_out [i*(*w_out) + j] = img_in [y*w_in + x];
+				img_out [i * (*w_out) + j] = img_in [y * w_in + x];
 			else
-				img_out [i*(*w_out) + j] = 0;
+				img_out [i * (*w_out) + j] = 0;
 		}
 	}
 }
 
 __device__ void
 scale_nearest_neighbourhood (IMGTYPE *img_out, IMGTYPE *img_in, int w_in, int h_in, float scale_factor){
-	int w_out = round(float(w_in) * scale_factor);
-	int h_out = round(float(h_in) * scale_factor);
+	int w_out = round (float(w_in) * scale_factor);
+	int h_out = round (float(h_in) * scale_factor);
 
 	int xo_in = w_in / 2;
 	int yo_in = h_in / 2;
@@ -491,10 +450,10 @@ scale_nearest_neighbourhood (IMGTYPE *img_out, IMGTYPE *img_in, int w_in, int h_
 
 	for (int i=0; i < h_out; ++i) {
 		for (int j=0; j < w_out; ++j) {
-			float x = float (j-xo_out) / scale_factor;
-			float y = float (i-yo_out) / scale_factor;
+			float x = float (j - xo_out) / scale_factor;
+			float y = float (i - yo_out) / scale_factor;
 			
-			img_out [i*w_out+j] = img_in [(int (y)+yo_in)*w_in+int (x)+xo_in];
+			img_out [i * w_out + j] = img_in [(int (y) + yo_in) * w_in + int (x) + xo_in];
 		}
 	}
 }

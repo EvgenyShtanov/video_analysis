@@ -18,14 +18,19 @@
 // #include "cuda_properties.h"
 
 struct TOUCH_DLL s_SceneParam {
-	float angle_light_height; //!< углы солнца
+	//!< углы солнца
+	float angle_light_height;
 	float angle_light_azimuth;
-	float angle_camera_height; //!< углы расположения камеры, по умолчанию (0,0)
+	//!< углы расположения камеры, по умолчанию (0,0)
+	float angle_camera_height; 
 	float angle_camera_azimuth;
-	float pixel_size;  //!< размер пикселя. Rendered image pixel size
-	float otstup; // ќтступ от проекции модели в выходном изображении. Ќеобходим дл€ отображени€ тени. Additional border in rendered image for shadow.
-	s_SceneParam(){
-		angle_camera_height = 0; //углы расположения камеры, по умолчанию (0,0)
+	//!< размер пикселя. Rendered image pixel size
+	float pixel_size;  
+	// ќтступ от проекции модели в выходном изображении. Ќеобходим дл€ отображени€ тени. Additional border in rendered image for shadow.
+	float otstup; 
+	s_SceneParam () {
+		// углы расположения камеры, по умолчанию (0,0)
+		angle_camera_height = 0; 
 		angle_camera_azimuth = 0;
 		otstup = (float)0.25;
 	};
@@ -61,14 +66,15 @@ class TOUCH_DLL CSceneRenderer {
 		CSceneRenderer () {};
 		virtual ~CSceneRenderer ()  {;};
 
-		int create_model( s_SceneParam scp, s_ModelViewParam smvp = s_ModelViewParam());
-		void set_scene_param( s_SceneParam scp) ;
-		void set_model_param( s_ModelParam smp) ;
+		int create_model (s_SceneParam scp, s_ModelViewParam smvp = s_ModelViewParam());
+		void set_scene_param (s_SceneParam scp) ;
+		void set_model_param (s_ModelParam smp) ;
 		
-		void set_rotation(float angleX, float  angleY, float angleZ, bool is_update_view = false); //!< Perform rendering. angleZ - top view rotation, yaw angle. angleZ - ракурс, рысканье
-		QImage get_image(int obj_val, bool use_obj, int shadow_val, bool use_shadow, int back_val);
-		QImage get_image();
-		QVector3D get_object_size();
+		//!< Perform rendering. angleZ - top view rotation, yaw angle. angleZ - ракурс, рысканье
+		void set_rotation (float angleX, float  angleY, float angleZ, bool is_update_view = false);
+		QImage get_image (int obj_val, bool use_obj, int shadow_val, bool use_shadow, int back_val);
+		QImage get_image ();
+		QVector3D get_object_size ();
 	private:;
 		model wgt;
 };

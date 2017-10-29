@@ -18,6 +18,9 @@ int CSceneRenderer::create_model( s_SceneParam scp, s_ModelViewParam smvp){
 
 	set_scene_param( scp);
 
+	printf ("The model was created\n");
+	getchar ();
+
 	return is_er;
 }
 
@@ -29,6 +32,7 @@ void CSceneRenderer::set_scene_param( s_SceneParam scp) {
 }
 
 void CSceneRenderer::set_model_param( s_ModelParam smp) {
+	printf ("full path name = %s\n", QString("%1/%2.ASE").arg(smp.QSmodel_path).arg(smp.QSname).toLocal8Bit ().constData ());
 	wgt.open_obj( QString("%1/%2.ASE").arg(smp.QSmodel_path).arg(smp.QSname));
 }
 

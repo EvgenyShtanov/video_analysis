@@ -212,7 +212,8 @@ __device__ void scale_nearest_neighbourhood(IMGTYPE *img_out, IMGTYPE *img_in, i
 /**
 	Fits bw image to minimal frame.
 */
-__device__ void fit_in_closest_frame(IMGTYPE *img_out, int *w_out,int *h_out,IMGTYPE *img_in, int w_in, int h_in) { // strongly deprecated
+__device__ void fit_in_closest_frame(IMGTYPE *img_out, int *w_out,int *h_out,IMGTYPE *img_in, int w_in, int h_in) 
+{ // strongly deprecated
 
 	// calc histograms
 	IMGTYPE* h_hist = horizontal_hist(img_in,w_in,h_in);

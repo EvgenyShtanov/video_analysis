@@ -1,3 +1,5 @@
+п»ї#include <map>
+#include <string>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 //#include <cufft.h>
@@ -17,160 +19,36 @@
 #include "ocv_base.h"
 #include "c/c_invmoments.h"
 #include "c/c_img_data_types.h"
-// #include "ocv_qt.h"
 
 typedef unsigned long int ulong;
 
 #define EPS 0.001
 
-// compare functions for template_params structure by ratio of width and height
-bool compare_wh_ratio (const template_params &a1, const template_params &a2) {
-   return float(a1.w) / float(a1.h) < float(a2.w) / float(a2.h);
-}
+int cu_fly_object_classifier::get_nearest_templates_by_width (QSize img_size) {
+	int num_of_w_fittest = 0;
 
-// Compare function for bit_mask_param structure by hamming distance between bitmasks
-bool compare_hamming_dist (const bit_mask_param &a1, const bit_mask_param &a2) {
-   return a1.ham_dist < a2.ham_dist;
-}
-
-// Compare function for hu_dist_param by Hu's distance between templates and input frame
-bool compare_hu_distance (const hu_dist_param &a1, const hu_dist_param &a2) {
-	return a1.hu_distance < a2.hu_distance;
-}
-
-/**
-	Returns indices of nearest templates
-*/
-QVector<int> get_nearest_templates( QVector<template_params> params_vec, QSize img_size, float similarity ) {
-	QVector<int> ids;
-
-	for(int i=0; i < params_vec.size(); ++i )
-		if( float( params_vec[i].h) * float(img_size.height()) > EPS ) { 
-			if( qAbs( float(params_vec[i].w) / float(params_vec[i].h) - float(img_size.width()) / float(img_size.height() ) )  < similarity  )
-				ids.push_back(params_vec[i].id);
-		}
-		else {
-			printf ("Error: get_nearest_templates( QVector<template_params>, QSize , float ): Division by zero!\n");
-			printf ("params_vec[i].h = %d, img_size.height() = %d\n", params_vec[i].h, img_size.height());
-		}
-	return ids;
-}
-
-QVector<int> get_nearest_templates( QHash< int, template_params> params_hash, QSize img_size, float similarity ) {
-	QVector<int> ids;
-
-	// confine by w/h
-	foreach(template_params t_hash, params_hash)
-		if( float(t_hash.h) * float(img_size.height() ) > EPS ) {
-			if( qAbs(float(t_hash.w) / float(t_hash.h) - float(img_size.width()) / float(img_size.height() ) ) < similarity ) {
-				ids.push_back(t_hash.id);
-			}
-		}
-		else {
-			printf ("Error: get_nearest_templates( QHash< int, template_params>, QSize, float) : Division by zero!\n");
-			printf ("params_vec[i].h = %d, img_size.height() = %d\n", t_hash.h, img_size.height() );
-		}
-
-	return ids;
-}
-
-QVector<int> get_nearest_templates_hw_and_mask( QHash< int, template_params> params_hash, QSize img_size, QBitArray img_mask, float similarity ) {
-	QVector<int> ids_hw;
-	QVector<int> ids_final;
-	QVector<bit_mask_param> param_ar;
-	int amount_to_return = 150;
-
-	// confine by w/h
-	foreach(template_params t_hash, params_hash)
-		if( float(t_hash.h) * float(img_size.height() ) > EPS ) {
-			if( qAbs(float(t_hash.w) / float(t_hash.h) - float(img_size.width()) / float(img_size.height() ) ) < similarity ) {
-				ids_hw.push_back(t_hash.id);
-			}
-		}
-		else {
-			printf ("Error: get_nearest_templates( QHash< int, template_params>, QSize, float) : Division by zero!\n");
-			printf ("params_vec[i].h = %d, img_size.height() = %d\n", t_hash.h, img_size.height() );
-		}
-
-	// Confine by bit mask similarity
-	ulong img_bit_mask_arg_up = n_bits_to_arg (img_mask, 32);
-	// Replace upper part of mask by bottom one
-	for (int i=0; i < 32; ++i)
-		img_mask.setBit (i, img_mask.at (i+32));
-	ulong img_bit_mask_arg_down = n_bits_to_arg (img_mask, 32);
-
-	// Calc hamming dist for each confined template
-	for (int i = 0; i < ids_hw.size (); ++i) {
-		int ham_dist = 0;
-		ham_dist += hamming_dist (img_bit_mask_arg_up, params_hash.value (ids_hw[i]).bit_mask_arg_up);
-		ham_dist += hamming_dist (img_bit_mask_arg_down, params_hash.value (ids_hw[i]).bit_mask_arg_down);
-		printf ("ids_hw[%d] = %d, ham_dist = %d\n", i, ids_hw[i], ham_dist);
-		param_ar.append (bit_mask_param (ids_hw[i], ham_dist));
+	for (int i = -NUM_PIXELS_WIDTH_DIFF; i < NUM_PIXELS_WIDTH_DIFF; ++i) {
+		num_of_w_fittest += width_map.values (img_size.width () + i).size ();
 	}
 
-	// Sort by hamming distance
-	qSort (param_ar.begin(), param_ar.end(), compare_hamming_dist);
-
-	amount_to_return = qMin (amount_to_return, ids_hw.size ());
-
-	// Get required amount of ids
-	for (int i=0; i < amount_to_return; ++i)
-		ids_final.append (param_ar[i].id);
-	
-	printf ("ids_final: ");
-	for (int i=0; i < amount_to_return; ++i)
-		printf ("%d ", ids_final[i]);
-
-	return ids_final;
+	return num_of_w_fittest;
 }
 
-QVector<int> get_nearest_templates_hw_hu (QHash<int, template_params> params_hash, QSize img_size, double *hu_moment_img, float similarity) {
-	printf ("get_nearest_templates_hw_hu\n");
-	QVector<int> ids_hw;
-	QVector<int> ids_final;
-	QVector<hu_dist_param> param_ar;
-	int amount_to_return = 250;
+void cu_fly_object_classifier::confine_templates_by_width (int img_w) {
+	work_templates.clear ();
 
-	// confine by w/h
-	foreach (template_params t_hash, params_hash)
-		if (float (t_hash.h) * float (img_size.height ()) > EPS ) {
-			if (qAbs (float (t_hash.w) / float (t_hash.h) - float (img_size.width ()) / float (img_size.height ())) < similarity) {
-				ids_hw.push_back (t_hash.id);
-			}
-		}
-		else {
-			printf ("Error: get_nearest_templates (QHash<int, template_params>, QSize, float) : Division by zero!\n");
-			printf ("params_vec[i].h = %d, img_size.height() = %d\n", t_hash.h, img_size.height ());
-		}
-
-	// Confine by Hu's moments distance
-	for (int i = 0; i < ids_hw.size (); ++i) {
-		double hu_dist = 0.0;
-		hu_dist = hu_moment_distance2 (hu_moment_img, params_hash.value (ids_hw[i]).hu_moments, 2);
-		
-		/* printf ("templates moments: ");
-		for (int j=0; j < 7; ++j)
-			printf ("%f ", params_hash.value (ids_hw[i]).hu_moments[j]);
-		printf ("\n"); */
-
-		param_ar.append (hu_dist_param (ids_hw[i], hu_dist));
+	for (int i = -NUM_PIXELS_WIDTH_DIFF; i <= NUM_PIXELS_WIDTH_DIFF; ++i) {
+		if (img_w + i > 0)
+			work_templates << width_map.values (img_w + i).toVector ();
 	}
-	// printf ("param_ar size = %d\n", param_ar.size ());
 
-	// Sort by hu's distance
-	qSort (param_ar.begin (), param_ar.end (), compare_hu_distance);
+	for (int i = 0; i < work_templates.size (); ++i) {
+		VectorInt obj = get_object  (work_templates[i]);
+		int w = get_template_params (work_templates[i]).w;
 
-	amount_to_return = qMin (amount_to_return, ids_hw.size ());
-
-	// Get required amount of ids
-	for (int i=0; i < amount_to_return; ++i)
-		ids_final.append (param_ar[i].id);
-	
-	/* printf ("ids_final: ");
-	for (int i = 0; i < amount_to_return; ++i)
-		printf ("%d ", ids_final[i]); */
-
-	return ids_final;
+		// QImage qimg_decompressed = decompress_sparse_object (obj, w, COMMON_HEIGHT, 255, 255);
+		// qimg_decompressed.save (QString ("temp/confine_templates_by_width/%1_decompressed_t.bmp").arg (work_templates[i]));
+	}
 }
 
 /**
@@ -186,7 +64,7 @@ long double estimate_integral_under_contour (QImage const& img, QVector<int> ind
 	for(int i=0; i < indices.size(); ++i) {
 		int x = indices[i] % t_width;
 		int y = indices[i] / t_width;
-		// printf("x = %d, y = %d; ", x, y);
+		// fprintf_s (stderr, "x = %d, y = %d; ", x, y);
 		if(x < img.width() && y < img.height() && x>=0 && y>=0 )
 			sum += long double( qGray(img.pixel(x,y)) ) / 512;
 	}
@@ -210,7 +88,7 @@ long double estimate_integral_under_contour (QImage const& img, QVector<int> ind
 	for(int i=0; i < indices.size(); ++i) {
 		int x = indices[i] % t_width + shift_x;
 		int y = indices[i] / t_width + shift_y;
-		// printf("x = %d, y = %d; ", x, y);
+		// fprintf_s (stderr, "x = %d, y = %d; ", x, y);
 		if(x < img.width() && y < img.height() && x>=0 && y>=0 )
 			sum += long double( qGray(img.pixel(x,y)) ) / 512;
 	}
@@ -235,7 +113,7 @@ unsigned int intersection_area (QImage const& img, QVector<int> indices, int t_w
 	for(int i=0; i < indices.size(); ++i) {
 		int x = indices[i] % t_width + shift_x;
 		int y = indices[i] / t_width + shift_y;
-		// printf("x = %d, y = %d; ", x, y);
+		// fprintf_s (stderr, "x = %d, y = %d; ", x, y);
 		if(x < img.width() && y < img.height() && x>=0 && y>=0 && qGray(img.pixel(x,y)) > 0 )
 			area += 1;
 	}
@@ -250,7 +128,7 @@ unsigned int intersection_area (QImage const& img, QVector<int> indices, int t_w
  *	int shift_x - shift relative to image coord system in X
  *	int shift_y - shift relative to image coord system in Y
  */
-long int nikodim_distance(QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
+long int nikodim_distance (QImage const& img, QVector<int> indices, int t_width, int shift_x, int shift_y) {
 	// calc object area in input bw image
 	long int Area_object = areaBW(img);
 	// calc area of template
@@ -279,12 +157,6 @@ long double weighted_full_sum (QImage const& img) {
 	return sum;
 }
 
-float normalize_integral(long double estim, float size, float alpha) {
-	return float(estim) / ( powf( float(size), alpha ) );
-	//	return ksi / (512 * __powf( float(pMap_sparse_cur_size), alpha ) );
-}
-
-
 template<typename T>
 T max(T a, T b) {
 	return (a > b ? a : b);
@@ -295,7 +167,7 @@ T min(T a, T b) {
 	return (a < b ? a : b);
 }
 
-void enhance_rectangle(QRect & rect, int margin, QRect boundaries) {
+void enhance_rectangle (QRect & rect, int margin, QRect boundaries) {
 	int left = std::max(0, rect.x() - margin);
 	int right = std::min(boundaries.width(), rect.width() + margin);
 	int top = std::max(0, rect.y() - margin);
@@ -304,618 +176,89 @@ void enhance_rectangle(QRect & rect, int margin, QRect boundaries) {
 	rect.setCoords(left,top,right,bottom);
 }
 
-void I_fly_object_classifier::set_default_params(){
-	UseIntensity = false;   //!< флаг: среднЯЯ Яркость по области самолета минимизируетсЯ
-	UseContour = true;   //!< флаг: среднЯЯ Яркость по области самолета минимизируетсЯ
-	alphaContour = (float)0.7;  //!< коэффициент влиниЯ контура, по-умолчанию 1.0f
-	alphaIntensity = (float)0.3;//!< коэффициент влиниЯ Яркости по области самолета , по-умолчанию 1.0f
+void I_fly_object_classifier::set_default_params () {
 	roi_w = 1;
-	roi_h = 1;          //!< радиусы области, в которой выполнЯется поиск минимума
-	template_similarity = (float)TEMPLATE_EPS_SIMILARITY;
-	// num_anglesX = 90;
-	// num_anglesY;
-	// num_anglesZ;
+	roi_h = 1; // СЂР°РґРёСѓСЃС‹ РѕР±Р»Р°СЃС‚Рё, РІ РєРѕС‚РѕСЂРѕР№ РІС‹РїРѕР»РЅРЇРµС‚СЃСЏ РїРѕРёСЃРє РјРёРЅРёРјСѓРјР°
+	step_rot_X = 2;
+	step_rot_Y = 2;
+	step_rot_Z = 2;
+	step_r = 1;
+	n_best_elements = 1;
 }
 
-int I_fly_object_classifier::append_template(QImage img, int model_id, float angleX, float angleY, float angleZ) {
+/**
+ * Function I_fly_object_classifier::append_template_const_height_hu
+ * Compress template to sparse representation, compute some descriptors
+ * of template and insert that with other parameters to hash
+ */
+int I_fly_object_classifier::append_template (QImage template_img, float angleX, float angleY, float angleZ) {
 	double tilt;
-	img = rotate_to_horizontal (img, &tilt); // rotate by eigenvalues
-	eig_tilts.push_back ((float) tilt);
-
-		// img.save(QString("D:/projects/TOUCH/fly_run/temp/templates_fit_rot_enhance/t_%1_%2_%3_eig.bmp").arg(angleX).arg(angleY).arg(angleZ) );
-	QRect rect = find_non_zero_rect(img);
-		// enhance_rectangle( rect, 2, img.rect() );
-	img = img.copy(rect);
-		// img.save(QString("D:/projects/TOUCH/fly_run/temp/templates_fit_rot_enhance/t_%1_%2_%3.bmp").arg(angleX).arg(angleY).arg(angleZ) );
-	
-	unsigned int cur_contour_length = 0;
-	unsigned int cur_compressed_obj_length = 0;
-	unsigned int contour_shift = 0;
-	unsigned int compressed_obj_shift = 0;
-	int tid = templates_param_hash.size(); // id of template
-	if(UseContour) {
-		// extract contour and compress (from sparse to compact representation) and append compressed contour
-		qv_contour_array.append(create_contour_and_compress(img)); // extract and append
-			// QImage test_decompress = decompress_sparse_object( qv_contour_array.last(), img.width(), img.height(), 255, 255 );
-			// test_decompress.save("test_decompress.bmp");
-		cur_contour_length = qv_contour_array.last().size();
-		if(templates_param_hash.empty())
-			contour_shift = 0;
-		else
-			contour_shift = templates_param_hash.value(tid-1).contour_shift + templates_param_hash.value(tid-1).contour_length;
-	}
-	if(UseIntensity) {
-		// compress (from sparse to compact representation) and append compressed template // store object only 
-		qv_object_array.append(compress_sparse_image(img));
-		cur_compressed_obj_length = qv_object_array.last().size();
-		if(templates_param_hash.empty())
-			compressed_obj_shift = 0;
-		else
-			compressed_obj_shift = templates_param_hash.value(tid-1).object_shift + templates_param_hash.value(tid-1).compressed_obj_length;
-		// templates_vector.push_back(img);
-	}
-	
-	// append to vector of templates
-		// templates_param_vector.push_back(template_params(tid, angleX, angleY, angleZ, img.width(), img.height(), contour_length ));
-	templates_param_hash.insert(tid, template_params(tid, angleX, angleY, angleZ, img.width(), img.height(), cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ));
-		// sort by width/height ratio
-		// qSort( templates_param_vector.begin(), templates_param_vector.end(), compare_wh_ratio);
-	return 0;
-}
-
-int I_fly_object_classifier::append_template_const_height (QImage img, int model_id, float angleX, float angleY, float angleZ) {
-	double tilt;
-	img = rotate_to_horizontal (img, &tilt); // rotate by eigenvalues
+	template_img = rotate_to_horizontal (template_img, &tilt); // rotate by eigenvalues
 	eig_tilts.push_back ((float) tilt);
 		
-	QRect rect = find_non_zero_rect (img);
-	img = img.copy (rect);
+	QRect rect = find_non_zero_rect (template_img);
+	template_img = template_img.copy (rect);
 
-	double scale = (double) COMMON_HEIGHT / (double) img.height ();
-	QImage scaled_img = im_scale_c (img, scale); /////
-	// scaled_img.save (QString ("D:/projects/TOUCH/fly_run/temp/scaled/t_%1_%2_%3.bmp").arg (angleX).arg (angleY).arg (angleZ) );
-			
-	ulong bit_mask_arg_up, bit_mask_arg_down;
-	unsigned int cur_contour_length = 0;
+	double scale = (double) COMMON_HEIGHT / (double) template_img.height ();
+	QImage scaled_t_img = im_scale_c (template_img, scale); /////
+
+	int tid = 0;
+	if (! templates_param_hash.empty ())
+		tid = templates_param_hash.size (); // id of template
+
+	// debug
+	// int Ntpm = 8100; // Num of templates per model
+	// int model_n = (int) ceil (float (tid + 1) / Ntpm);
+	// fprintf_s (stderr, "model_n = %d, tid = %d dirname = %s\n", model_n, tid, (QString ("D:/projects/TOUCH/fly_run/temp/scaled/%1/%2").arg (scaled_t_img.width ()).arg (model_n)).toStdString ().c_str ());
+	// scaled_t_img.save (QString ("D:/projects/TOUCH/fly_run/temp/scaled/t_%1_%2_%3.png").arg (angleX).arg (angleY).arg (angleZ));
+	QDir dir (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ()));
+	if (! dir.exists ()) {
+		if (! dir.mkdir (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ()))) {
+			fprintf_s (stderr, "Can't create dir %s!\n", (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ())).toStdString ().c_str ());
+			return -1;
+		}
+	}
+	QDir dir2 (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ()));
+	if (! dir2.exists ()) {
+		if (! dir2.mkdir (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ()))) {
+			fprintf_s (stderr, "Can't create dir %s!\n", (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ())).toStdString ().c_str ());
+			return -1;
+		}
+	}
+	scaled_t_img.save (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1/t_%3_%4_%5.png").arg (scaled_t_img.width ()).arg (angleX).arg (angleY).arg (angleZ));
+	// end debug
+
 	unsigned int cur_compressed_obj_length = 0;
-	unsigned int contour_shift = 0;
 	unsigned int compressed_obj_shift = 0;
-	int tid = templates_param_hash.size (); // id of template
-	if (UseContour) {
-		// extract contour and compress (from sparse to compact representation) and append compressed contour
-		qv_contour_array.append (create_contour_and_compress (scaled_img) ); // extract and append
-			
-		cur_contour_length = qv_contour_array.last ().size ();
-		if (templates_param_hash.empty () )
-			contour_shift = 0;
-		else
-			contour_shift = templates_param_hash.value (tid-1).contour_shift + templates_param_hash.value (tid-1).contour_length;
+
+	// Compress (from sparse to compact representation) and append compressed template // Store object's pixels only
+	vec_object_array.push_back (compress_sparse_image_u (scaled_t_img));
+
+	// Get length or num of pixels in current and previous templates
+	cur_compressed_obj_length = vec_object_array.back ().size ();
+	if (templates_param_hash.empty ()) {
+		compressed_obj_shift = 0;
+		tid = 0;
 	}
-	if (UseIntensity) {
-		// compress (from sparse to compact representation) and append compressed template // store object only 
-		qv_object_array.append (compress_sparse_image (scaled_img) );
-
-		// Create bit mask
-		QBitArray mask = image_to_bits (scaled_img, 8, 8, (float)BIT_MASK_DIFF);
-		
-		/* printf ("Mask as bit array:\n");
-		for (int i=0; i < 8; ++i) {
-			printf ("\n");
-			for (int j = 0; j < 8; ++j)
-				printf ("%d ", mask.at(i*8 + j));
-		} */
-		// Convert mask to arguments
-		bit_mask_arg_up = n_bits_to_arg (mask, 32);
-		// Replace upper part of mask by bottom one
-		for (int i=0; i < 32; ++i)
-			mask.setBit (i, mask.at (i+32));
-		bit_mask_arg_down = n_bits_to_arg (mask, 32);
-
-		/*printf ("bit_mask_arg = %ull\n", bit_mask_arg_up);
-		// testing print
-		for (int i=0; i < 4; ++i) {
-			printf ("\n");
-			for (int j = 0; j < 8; ++j)
-				printf ("%d ", getbit (bit_mask_arg_up, i*8 + j));
-		}
-		for (int i=0; i < 4; ++i) {
-			printf ("\n");
-			for (int j = 0; j < 8; ++j)
-				printf ("%d ", getbit (bit_mask_arg_down, i*8 + j));
-		}
-		getchar ();*/
-
-		cur_compressed_obj_length = qv_object_array.last ().size ();
-		if (templates_param_hash.empty () )
-			compressed_obj_shift = 0;
-		else
-			compressed_obj_shift = templates_param_hash.value (tid-1).object_shift + templates_param_hash.value (tid-1).compressed_obj_length;
+	else {
+		compressed_obj_shift = templates_param_hash.value (tid - 1).object_shift + templates_param_hash.value (tid - 1).compressed_obj_length;
 	}
-	// append to vector of templates
+
+	// Insert templates parameters to hash
 	templates_param_hash.insert (tid, template_params (tid, angleX, angleY, angleZ, 
-		scaled_img.width (), scaled_img.height (), bit_mask_arg_up, bit_mask_arg_down, cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ) );
-		
+		scaled_t_img.width (), cur_compressed_obj_length, compressed_obj_shift));
+
+	width_map.insertMulti (scaled_t_img.width (), tid);
+
 	return 0;
 }
 
-int I_fly_object_classifier::append_template_const_height_hu (QImage img, int model_id, float angleX, float angleY, float angleZ) {
-	double tilt;
-	img = rotate_to_horizontal (img, &tilt); // rotate by eigenvalues
-	eig_tilts.push_back ((float) tilt);
-		
-	QRect rect = find_non_zero_rect (img);
-	img = img.copy (rect);
 
-	double scale = (double) COMMON_HEIGHT / (double) img.height ();
-	QImage scaled_img = im_scale_c (img, scale); /////
-	// scaled_img.save (QString ("D:/projects/TOUCH/fly_run/temp/scaled/t_%1_%2_%3.bmp").arg (angleX).arg (angleY).arg (angleZ) );
-			
-	ulong bit_mask_arg_up, bit_mask_arg_down;
-	unsigned int cur_contour_length = 0;
-	unsigned int cur_compressed_obj_length = 0;
-	unsigned int contour_shift = 0;
-	unsigned int compressed_obj_shift = 0;
-	int tid = templates_param_hash.size (); // id of template
-	double *hu_mom;
-	if (UseContour) {
-		// extract contour and compress (from sparse to compact representation) and append compressed contour
-		qv_contour_array.append (create_contour_and_compress (scaled_img) ); // extract and append
-			
-		cur_contour_length = qv_contour_array.last ().size ();
-		if (templates_param_hash.empty () )
-			contour_shift = 0;
-		else
-			contour_shift = templates_param_hash.value (tid-1).contour_shift + templates_param_hash.value (tid-1).contour_length;
-	}
-	if (UseIntensity) {
-		// compress (from sparse to compact representation) and append compressed template // store object only
-		qv_object_array.append (compress_sparse_image (scaled_img) );
+cu_fly_object_classifier::cu_fly_object_classifier () {
+	set_default_params ();
 
-		ImgDataArray img_data_ar;
-		img_data_ar.data = scaled_img.bits ();
-		img_data_ar.w = scaled_img.width ();
-		img_data_ar.h = scaled_img.height ();
-		img_data_ar.bpl = scaled_img.bytesPerLine ();
-
-		hu_mom = hu_moments (&img_data_ar);
-		// printf ("%.20f %.20f %.20f %.20f %.20f %.20f %.20f\n", hu_mom[0], hu_mom[1], hu_mom[2], hu_mom[3], hu_mom[4], hu_mom[5], hu_mom[6]);
-		/* cv::Mat mat = qimage_to_ocv_mat (scaled_img);
-		imwrite( "Gray_Image.jpg", mat );
-		cv::Moments moments = cv::moments (mat);
-		cv::HuMoments (moments, hu_mom);*/
-
-		cur_compressed_obj_length = qv_object_array.last ().size ();
-		if (templates_param_hash.empty () )
-			compressed_obj_shift = 0;
-		else
-			compressed_obj_shift = templates_param_hash.value (tid-1).object_shift + templates_param_hash.value (tid-1).compressed_obj_length;
-	}
-	// append to vector of templates
-	templates_param_hash.insert (tid, template_params (tid, angleX, angleY, angleZ, 
-		scaled_img.width (), scaled_img.height (), bit_mask_arg_up, bit_mask_arg_down, hu_mom, cur_contour_length, cur_compressed_obj_length, contour_shift, compressed_obj_shift ) );
-	printf ("ok5\n");
-	return 0;
-}
-
-fly_object_classifier::fly_object_classifier(){
-	set_default_params();
-}
-
-fly_object_classifier::~fly_object_classifier(){
-	clearMemory( ) ;
-}
-
-void fly_object_classifier::clearMemory( ) {
-
-}
-
-int fly_object_classifier::estimate_similarity(QImage const & img) {
-	// make bw
-	// QImage img_bw = img2bw(img, 115, 1); // the simplest way, change later to blob analysis
-	// img_bw.save("d:/temp/temp/img_bw.bmp");
-	// resize, fit in closest frame
-	// QPoint leftTopPoint = fit_in_closest_frame(img_bw);
-	// img_bw.save("d:/temp/temp/fit_in_closest_frame_a10.bmp");
-	// calc gradient of original but cutted image
-	// QImage img_grad = gradXY_Sobel( img.copy(leftTopPoint.x(), leftTopPoint.y(), img_bw.width(), img_bw.height()));
-	QImage img_grad = gradXY_Sobel( img );
-
-	// get_nearest_templates
-	// QVector<int> work_templates = get_nearest_templates(templates_param_vector, template_similarity);
-	QVector<int> work_templates = get_nearest_templates (templates_param_hash, img_grad.size(), template_similarity);
-
-	// calc contour integral and (or) integral under object
-	for(int i = 0; i < work_templates.size(); ++i) {
-		if(img_grad.width() == 0) {
-			printf("Error: fly_object_classifier::estimate_similarity(QImage const & ): Division by zero - empty gradient image!\n");
-			return 0;
-		}	
-		// printf("templates_param_hash.value( work_templates[i]).w = %d, img_grad.width() = %d\n", templates_param_hash.value( work_templates[i]).w, img_grad.width());
-		float scale = float(templates_param_hash.value( work_templates[i]).w) / float (img_grad.width() );
-		// printf("scale = %f\n", scale);
-
-		int tid = templates_param_hash.value(work_templates[i]).id;
-		// printf("tid = %d\n", tid);
-
-		QImage scaled_img = im_scale_c(img_grad, scale);
-		// scaled_img.save("d:/temp/temp/scaled_img.bmp");	
-
-		for(int k=0;k < 360; k+=step_rot_Z) {
-			QImage rotated_img = im_rotate_c(scaled_img, double(k) );
-
-			long double sum = estimate_integral_under_contour(  rotated_img, qv_contour_array[tid], templates_param_hash.value(tid).w);
-
-			float norm_sum = normalize_integral( sum, qv_contour_array[tid].size(), (float)0.7);
-
-			energy_map.insertMulti( tid, qMakePair( k,  norm_sum) );
-			// append info about image to auxiliary vector: id			
-		}
-	}
-	
-	return 0;
-}
-
-int 
-fly_object_classifier::estimate_similarity_rx_ry (QImage const & img)
-{
-	QImage img_grad = gradXY_Sobel ( img );
-
-	// fit in frame!!!
-
-	// fit_in_closest_frame( img_grad );
-
-	// get_nearest_templates
-	QVector<int> work_templates = get_nearest_templates(templates_param_hash, img_grad.size(), template_similarity);
-
-	printf ("get_nearest_templates - ok!, work_templates.size() = %d\n",work_templates.size() );
-
-	// calc contour integral and (or) integral under object
-	for (int i_template = 0; i_template < work_templates.size(); ++i_template) {
-		if(img_grad.width() == 0) {
-			printf("Error: fly_object_classifier::estimate_similarity_rx_ry (QImage const &): Division by zero - empty gradient image!\n");
-			return 0;
-		}	
-		float scale = float(templates_param_hash.value( work_templates[i_template]).w) / float (img_grad.width() );
-		// printf("scale = %f\n", scale);
-		// int tid = templates_param_hash.value(work_templates[i]).id;
-		int tid = work_templates[i_template];
-
-		QImage scaled_img = im_scale_c(img_grad, scale);
-		// scaled_img.save("scaled_img.bmp");
-		// printf("scaled_img type = %d\n", scaled_img.format() );
-		
-		int cur_w,cur_h;
-		for(int k=0;k < 360; k += step_rot_Z) {
-			QImage rotated_img = im_rotate_c_2(scaled_img, double(k) );
-			// rotated_img.save(QString("temp/rotated_img_%1_%2.bmp").arg(i_template).arg(k));
-			// fit_in_closest_frame( rotated_img);
-			// rotated_img.save("rotated_img_fit.bmp");
-			
-			for( int ii=(-roi_h); ii<=roi_h; ii+=step_r) {
-				for( int jj=(-roi_w); jj<=roi_w; jj+=step_r) {
-					cur_h = rotated_img.height();
-					cur_w = rotated_img.width();
-					int x = jj;
-					int y = ii;
-					if(ii < 0) y = 0;
-					if(jj< 0) x = 0;
-					if(ii> 0) cur_h -= ii;
-					if(jj > 0) cur_w -= jj;
-					QImage rotated_img_cut = rotated_img.copy(jj,ii,cur_w,cur_h);
-					// rotated_img_cut.save(QString("temp/rotated_img_cut_%1_%2_%3_%4.bmp").arg(i_template).arg(k).arg(ii).arg(jj));
-					// rotated_img_cut.save("rotated_img_cut.bmp");
-
-					long double sum = estimate_integral_under_contour(  rotated_img_cut, qv_contour_array[tid], templates_param_hash.value(tid).w);
-
-					float norm_sum = normalize_integral( sum, qv_contour_array[tid].size(), (float)0.7);
-
-					energy_map.insertMulti( tid, qMakePair( k,  norm_sum) );
-					// append info about image to auxiliary vector: id			
-				}
-			}
-		}
-	}
-	
-	return 0;
-}
-
-// Store n best elements only
-int fly_object_classifier::estimate_similarity_rx_ry_n_elements (QImage const & img) {
-	QVector<float> temp_energies; // store n best energies
-
-	QImage img_grad = gradXY_Sobel( img );
-
-	// fit in frame
-	// fit_in_closest_frame( img_grad );
-
-	// get_nearest_templates
-	QVector<int> work_templates = get_nearest_templates(templates_param_hash, img_grad.size(), template_similarity);
-
-	printf("get_nearest_templates - ok!, work_templates.size() = %d\n",work_templates.size() );
-
-	// calc contour integral and (or) integral under object
-	for(int i_template = 0; i_template < work_templates.size(); ++i_template) {
-		if(img_grad.width() == 0) {
-			printf("Error: int fly_object_classifier::estimate_similarity_rx_ry_n_elements (QImage const & ): Division by zero - empty gradient image!\n");
-			return 0;
-		}	
-		float scale = float(templates_param_hash.value( work_templates[i_template]).w) / float (img_grad.width() );
-		int tid = work_templates[i_template];
-
-		QImage scaled_img = im_scale_c(img_grad, scale);
-		
-		for(int k=0;k < 360; k += step_rot_Z) {
-			QImage rotated_img = im_rotate_c_2(scaled_img, double(k) );
-			truncate(rotated_img, 25);
-			// printf("rotated_img: x1 = %d, y1 = %d, x2 = %d, y2 = %d\n", rotated_img.rect().left(), rotated_img.rect().top(), rotated_img.rect().right(), rotated_img.rect().bottom());
-			QRect rect = find_non_zero_rect(rotated_img);
-			// printf("rect_coords: x1 = %d, y1 = %d, x2 = %d, y2 = %d\n", rect.left(), rect.top(), rect.right(), rect.bottom());
-			rotated_img = rotated_img.copy(rect);
-			// rotated_img.save(QString("D:/projects/TOUCH/fly_run/temp/input_img_rot/rotated_img_cut_%1.bmp").arg(k));
-			// printf("rotated_img cut: x1 = %d, y1 = %d, x2 = %d, y2 = %d\n", rotated_img.rect().left(), rotated_img.rect().top(), rotated_img.rect().right(), rotated_img.rect().bottom());
-
-			long double w_sum = weighted_full_sum(rotated_img);
-
-			for( int ii=(-roi_h); ii<=roi_h; ii+=step_r) {
-				for( int jj=(-roi_w); jj<=roi_w; jj+=step_r) {
-					int cur_h = rotated_img.height();
-					int cur_w = rotated_img.width();
-					int x = jj;
-					int y = ii;
-					if(ii < 0) y = 0;
-					if(jj< 0) x = 0;
-					if(ii> 0) cur_h -= ii;
-					if(jj > 0) cur_w -= jj;
-					QImage rotated_img_cut = rotated_img.copy(jj,ii,cur_w,cur_h);
-
-					long double sum = estimate_integral_under_contour(  rotated_img_cut, qv_contour_array[tid], templates_param_hash.value(tid).w);
-
-					// float norm_sum = normalize_integral( sum, qv_contour_array[tid].size(), 0.7);
-					float norm_sum = normalize_integral( sum, w_sum, 1);
-					printf("norm_sum = %f, w_sum = %lf, sum = %lf \n", norm_sum, w_sum, sum);
-
-					float old_best_energy;
-					if(temp_energies.isEmpty())
-						old_best_energy = 0;
-					else
-						old_best_energy = temp_energies.last();
-
-					if( norm_sum > old_best_energy ) {
-						float bad_energy = append_and_pop( temp_energies, this->n_best_elements, norm_sum);
-						printf("best = %f, bad_energy = %f\n", norm_sum, bad_energy);
-						energy_map.insertMulti( tid, qMakePair( k,  float(norm_sum) ) );
-						if(temp_energies.size() >= this->n_best_elements-1) {
-							// remove element with too small energy value
-							QList<int>	keys = energy_map.keys( qMakePair( k,  bad_energy));
-							for(int i=0;i<keys.size();++i) {
-								QHash<int, QPair<int, float> >::iterator iter = this->energy_map.find(keys[i]);
-								while(iter!=this->energy_map.end() && iter.key()==keys[i]) {
-									if(iter.value()==qMakePair( k,  bad_energy)) {
-										iter = this->energy_map.erase(iter);
-									}
-									else {
-										++iter;
-									}
-								}
-							}		
-						}
-					}
-					// append info about image to auxiliary vector: id
-				}
-			}
-		}
-	}
-	
-	return 0;
-}
-
-void remove_low_energy( QHash< QPair<int,int>,  float> &map, float low_element) {
-	// remove element with too small energy value from the energy_map
-	QList<QPair<int,int> >	keys = map.keys( low_element);
-	for(int i=0;i < keys.size();++i) {
-		QHash<QPair<int, int>, float>::iterator iter = map.find(keys[i]);
-		while( iter!=map.end() && iter.key()==keys[i]) {
-			if( iter.value()== low_element ) {
-				iter = map.erase(iter); // remove
-			}
-			else {
-				++iter;
-			}
-		}
-	}		
-}
-
-// Store n best elements only
-int fly_object_classifier::estimate_similarity_rx_ry_n_elements_eigen_rot(QImage const & img) {
-	QVector<float> temp_energies; // store n best energies
-
-	QImage img_grad = gradXY_Sobel( img );
-
-	// find nearest templates by w/h ratio
-	double tilt;
-	img_grad = rotate_to_horizontal (img_grad,&tilt);
-	truncate(img_grad, 15);
-	QRect rect = find_non_zero_rect (img_grad);
-	img_grad = img_grad.copy(rect);
-	QVector<int> work_templates = get_nearest_templates(templates_param_hash, img_grad.size(), template_similarity);
-	printf("get_nearest_templates - ok!, work_templates.size() = %d\n",work_templates.size() );
-
-	// calc contour integral and (or) integral under object
-	for(int i_template = 0; i_template < work_templates.size(); ++i_template) {
-		if(img_grad.width() == 0) {	
-			printf("Error: int fly_object_classifier::estimate_similarity_rx_ry_n_elements_eigen_rot(QImage const &) : Division by zero - empty gradient image!\n");
-			return 0;
-		}	
-		float scale = float(templates_param_hash.value( work_templates[i_template]).w) / float (img_grad.width() );
-		int tid = work_templates[i_template];
-		QImage scaled_img = im_scale_c(img_grad, scale);
-		
-		for(int k=0;k < 360; k += 180) {// step_rot_Z) {
-			double angle_rad = k * double(M_PI) / double(180);
-			QImage rotated_img = im_rotate_c_2(scaled_img, angle_rad);
-			// rotated_img.save("D:/projects/TOUCH/fly_run/temp/comparision/orig.bmp");
-			// QRect rect = find_non_zero_rect(rotated_img);
-			// rotated_img = rotated_img.copy(rect);
-			long double w_sum = weighted_full_sum(rotated_img);
-
-			for( int ii=(-roi_h); ii <= roi_h; ii+=step_r) {
-				for( int jj=(-roi_w); jj <= roi_w; jj+=step_r) {
-					// int cur_h = rotated_img.height();
-					// int cur_w = rotated_img.width();
-					// int x = jj;
-					// int y = ii;
-					// if(ii < 0) y = 0;
-					// if(jj < 0) x = 0;
-					// if(ii > 0) cur_h -= ii;
-					// if(jj > 0) cur_w -= jj;
-					// QImage rotated_img_cut = rotated_img.copy(jj,ii,cur_w,cur_h);
-
-					// testing print
-					// rotated_img.save("D:/projects/TOUCH/fly_run/temp/comparision/orig.bmp");
-					// QImage test_decompress = decompress_sparse_object( qv_contour_array[tid], templates_param_hash.value(tid).w, templates_param_hash.value(tid).h, 255, 255 );
-					// test_decompress.save("D:/projects/TOUCH/fly_run/temp/comparision/template.bmp");
-					// getchar();
-
-					long double sum = estimate_integral_under_contour(  rotated_img, qv_contour_array[tid], templates_param_hash.value(tid).w, jj, ii);
-
-					// float norm_sum = normalize_integral( sum, qv_contour_array[tid].size(), 0.7);
-					float norm_sum = normalize_integral( sum, w_sum, 1);
-
-					float old_best_energy;
-					if(temp_energies.isEmpty())
-						old_best_energy = 0;
-					else
-						old_best_energy = temp_energies.last();
-
-					if( norm_sum > old_best_energy ) {
-						float low_energy = append_and_pop( temp_energies, this->n_best_elements, norm_sum);
-						energy_hash_table.insert( qMakePair( tid, k),  float(norm_sum) );
-						if(temp_energies.size() >= this->n_best_elements-1) {
-							remove_low_energy( this->energy_hash_table, low_energy);
-						}
-					}
-					// append info about image to auxiliary vector: id
-				}
-			}
-		}
-	}
-	return 0;
-}
-
-// Store n best elements only
-int 
-fly_object_classifier::estimate_similarity_rx_ry_n_elements_eigen_rot_Nicodim_dist(QImage const & img) {
-	QVector<float> temp_energies; // store n best energies
-	
-	// Rotate according eigenvalues
-	double tilt;
-	QImage img_eig = rotate_to_horizontal(img,&tilt);
-	QRect rect = find_non_zero_rect(img_eig); img_eig = img_eig.copy(rect);
-	
-	// find nearest templates by w/h ratio
-	QVector<int> work_templates = get_nearest_templates(templates_param_hash, img_eig.size(), template_similarity);
-	printf("get_nearest_templates - ok!, work_templates.size() = %d\n", work_templates.size() );
-
-	// calc contour integral and (or) integral under object
-	for(int i_template = 0; i_template < work_templates.size(); ++i_template) {
-		if(img_eig.width() == 0) {
-			printf("Error: fly_object_classifier::estimate_similarity_rx_ry_n_elements_eigen_rot_Nicodim_dist(QImage const & ) : Division by zero - empty gradient image!\n");
-			return 0;
-		}	
-		float scale = float(templates_param_hash.value( work_templates[i_template]).w) / float (img_eig.width() );
-		QImage scaled_img = im_scale_c(img_eig, scale);
-		
-		int tid = work_templates[i_template];
-		
-		for(int k=0;k < 360; k += 180) {// step_rot_Z) {
-			QImage rotated_img = im_rotate_c_2( scaled_img, k * double(M_PI) / double(180) );
-			
-			for( int ii=(-roi_h); ii <= roi_h; ii+=step_r) {
-				for( int jj=(-roi_w); jj <= roi_w; jj+=step_r) {
-
-					long double sum = nikodim_distance( rotated_img, qv_object_array[tid], templates_param_hash.value(tid).w, jj, ii);
-					
-					float old_best_energy = temp_energies.isEmpty() ? FLT_MAX : temp_energies.last();
-					if( sum < old_best_energy ) { // search min distance
-						float low_energy = append_and_pop( temp_energies, this->n_best_elements, sum);
-						energy_hash_table.insert( qMakePair( tid, k),  float(sum) );
-						if(temp_energies.size() >= this->n_best_elements-1) {
-							remove_low_energy( this->energy_hash_table, low_energy);
-						}
-					}
-					// append info about image to auxiliary vector: id
-				}
-			}
-		}
-	}
-	return 0;
-}
-
-// Store n best elements only
-int 
-fly_object_classifier::estimate_similarity_rx_ry_n_elements_eigen_rot_Nicodim_dist_temp (QImage const & img) {
-	QVector<float> temp_energies; // store n best energies
-	// img.save("D:/projects/TOUCH/fly_run/temp/comparision/orig_input.bmp");
-	// find nearest templates by w/h ratio
-	double tilt;
-	QImage img_eig = rotate_to_horizontal(img,&tilt);
-	// img_eig.save("D:/projects/TOUCH/fly_run/temp/comparision/img_eig.bmp");
-	QRect rect = find_non_zero_rect(img_eig);
-	img_eig = img_eig.copy(rect);
-	// img_eig.save("D:/projects/TOUCH/fly_run/temp/comparision/img_eig_non_zero.bmp");
-	QVector<int> work_templates = get_nearest_templates(templates_param_hash, img_eig.size(), template_similarity);
-	printf("get_nearest_templates - ok!, work_templates.size() = %d\n",work_templates.size() );
-
-	// calc contour integral and (or) integral under object
-	for(int i_template = 0; i_template < work_templates.size(); ++i_template) {
-		if(img_eig.width() == 0) {	
-			printf("Error: int fly_object_classifier::estimate_similarity_rx_ry_n_elements_eigen_rot_Nicodim_dist_temp (QImage const & ) : Division by zero - empty gradient image!\n");
-			return 0;
-		}	
-		float scale = float(templates_param_hash.value( work_templates[i_template]).w) / float (img_eig.width() );
-		int tid = work_templates[i_template];
-		QImage scaled_img = im_scale_c(img_eig, scale);
-		// scaled_img.save("D:/projects/TOUCH/fly_run/temp/comparision/img_eig_non_zero_scaled.bmp");
-		for(int k=0;k < 360; k += 180) {// step_rot_Z) {
-			double angle_rad = k * double(M_PI) / double(180);
-			QImage rotated_img = im_rotate_c_2(scaled_img, angle_rad);
-			// rotated_img.save("D:/projects/TOUCH/fly_run/temp/comparision/img_eig_non_zero_scaled_rotated.bmp");
-			// QRect rect = find_non_zero_rect(rotated_img);
-			// rotated_img = rotated_img.copy(rect);
-			// long double w_sum = weighted_full_sum(rotated_img);
-			for( int ii=(-roi_h); ii <= roi_h; ii+=step_r) {
-				for( int jj=(-roi_w); jj <= roi_w; jj+=step_r) {
-					// testing print
-					// rotated_img.save("D:/projects/TOUCH/fly_run/temp/comparision/orig.bmp");
-					// QImage test_decompress = decompress_sparse_object( qv_object_array[tid], templates_param_hash.value(tid).w, templates_param_hash.value(tid).h, 255, 255 );
-					// test_decompress.save("D:/projects/TOUCH/fly_run/temp/comparision/template.bmp");
-					long double sum = nikodim_distance(  rotated_img, qv_object_array[tid], templates_param_hash.value(tid).w, jj, ii);
-					// float norm_sum = normalize_integral( sum, qv_contour_array[tid].size(), 0.7);
-					float norm_sum = sum;
-
-					float old_best_energy=FLT_MAX;
-					if(temp_energies.isEmpty())
-						old_best_energy = FLT_MAX;
-					else
-						old_best_energy = temp_energies.last();
-
-					if( norm_sum < old_best_energy ) { // search min distance
-						float low_energy = append_and_pop( temp_energies, this->n_best_elements, norm_sum);
-						energy_hash_table.insert( qMakePair( tid, k),  float(norm_sum) );
-						if(temp_energies.size() >= this->n_best_elements-1) {
-							remove_low_energy( this->energy_hash_table, low_energy);
-						}
-					}
-					// append info about image to auxiliary vector: id
-				}
-			}
-		}
-	}
-	return 0;
-}
-
-cu_fly_object_classifier::cu_fly_object_classifier() {
-	set_default_params();
+	// int max_possible_w_fit_sum = 0;
+	// int ids_sorted_by_width_CPU = 0;
 
 	cu_img_array = 0; // input image
 	cu_img_array_upsd = 0; // input image
@@ -925,457 +268,320 @@ cu_fly_object_classifier::cu_fly_object_classifier() {
 	cu_energy_table = 0; // size is 
 	cu_rotation = 0; // size is 
 	cu_energy_table_n_best = 0; // size is n_best_elements
+	cu_best_ids = 0;
+	input_img_tilt = 0;
 	is_memory_allocated = false;
 	is_data_copyed = false;
+	// is_cpu_data_prepared = false;
 
 	is_upsd = false;
 }
 
-cu_fly_object_classifier::~cu_fly_object_classifier() {
+cu_fly_object_classifier::~cu_fly_object_classifier () {
 	clearMemory();
 }
 
-void cu_fly_object_classifier::clearMemory( ) {
-	if(cu_img_array)
-		cudaFree(cu_img_array);
-	if(cu_img_array_upsd)
-			cudaFree(cu_img_array_upsd);
-	if(cu_params_array) {
-		// for (int i = 0; i < templates_param_hash.size (); ++i)
-			// cudaFree (cu_params_array [i].hu_moments);
-		cudaFree(cu_params_array);
-	}
-	if(cu_object_array)
-		cudaFree(cu_object_array);
-	if(cu_indices_of_fittest)
-		cudaFree(cu_indices_of_fittest);
-	if(cu_energy_table)
-		cudaFree(cu_energy_table);
-	if(cu_rotation)
-		cudaFree(cu_rotation);
-	if(cu_energy_table_n_best)
-		cudaFree(cu_energy_table_n_best);
-	foreach (template_params t_p, templates_param_hash)
-		if (t_p.hu_moments != 0)
-			delete[] t_p.hu_moments;
+void cu_fly_object_classifier::clearMemory () {
+	is_memory_allocated = false;
+	is_data_copyed = false;
+	input_img_tilt = 0;
+
+	if (cu_img_array)
+		cudaFree (cu_img_array);
+	if (cu_img_array_upsd)
+		cudaFree (cu_img_array_upsd);
+	if (cu_params_array)
+		cudaFree (cu_params_array);
+	if (cu_object_array)
+		cudaFree (cu_object_array);
+	if (cu_indices_of_fittest)
+		cudaFree (cu_indices_of_fittest);
+	if (cu_energy_table)
+		cudaFree (cu_energy_table);
+	if (cu_rotation)
+		cudaFree (cu_rotation);
+	if (cu_energy_table_n_best)
+		cudaFree (cu_energy_table_n_best);
 }
 
-int cu_fly_object_classifier::allocate_memory_on_GPU(bool realloc_force) { // allocates required memory on GPU and sets is_memory_allocated to true
-	if(is_memory_allocated && realloc_force) {
-		printf("realloc_force\n");
-		this->clearMemory();
+int cu_fly_object_classifier::allocate_memory_on_GPU (bool realloc_force) { // allocates required memory on GPU and sets is_memory_allocated to true
+	if (is_memory_allocated && realloc_force) {
+		fprintf_s (stderr, "realloc_force\n");
+		this->clearMemory ();
 		is_memory_allocated = false;
-		this->allocate_memory_on_GPU();
+		this->allocate_memory_on_GPU ();
 	} 
-	else if(is_memory_allocated) {
-		printf("Memory was already allocated on GPU\n");
+	else if (is_memory_allocated) {
+		fprintf_s (stderr, "Memory was already allocated on GPU\n");
 		return ErrorAllocateMemoryGPU;
 	}
 	else {
 		cudaError_t mem2d;
-		mem2d = cudaMalloc((void**) &cu_params_array, sizeof (template_params) * templates_param_hash.size ());
-		if( mem2d != cudaSuccess ) {
-			printf("Error:cudaMalloc((void**)&cu_params_array, sizeof(template_params)*templates_param_hash.size()):Error message=%s\n", cudaGetErrorString (mem2d));
-			clearMemory (); return ErrorAllocateMemoryGPU;
+		mem2d = cudaMalloc ((void**) &cu_params_array, sizeof (template_params) * templates_param_hash.size ());
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), ErrorAllocateMemoryGPU, __FILE__, __LINE__); } ;
+		fprintf_s (stderr, "cu_params_array-allocated, size=%d, sizeof(template_params)=%d\n",templates_param_hash.size(),sizeof(template_params));
+
+		if (templates_param_hash.size () != vec_object_array.size ()) {
+			handle_error ("allocate_memory_on_GPU_cu: templates_param_hash.size != qv_object_array.size",ErrorAllocateMemoryGPU,__FILE__,__LINE__);
 		}
-		/* for (int i = 0; i < 7; ++i) {
-			mem2d = cudaMalloc ((void**) &(cu_params_array[i].hu_moments), sizeof (double)*7);
-			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc( (void**)&cu_params_array->hu_moments, sizeof(double)*7):Error message=%s\n", cudaGetErrorString (mem2d));
-				clearMemory( ); return ErrorAllocateMemoryGPU;
-			}
-		} */
-		printf ("cu_params_array - allocated, size = %d, sizeof(template_params) = %d\n", templates_param_hash.size (), sizeof (template_params));
-		if(UseIntensity) {
-			// check
-			if(templates_param_hash.size () != qv_object_array.size () ) {
-				printf("cu_fly_object_classifier::allocate_memory_on_GPU: templates_param_hash.size()!=qv_object_array.size()\n");
-				clearMemory( ); return ErrorAllocateMemoryGPU;
-			}
-			template_params t_temp = templates_param_hash.value (qv_object_array.size()-1);
-			int size_of_obj_array = t_temp.object_shift + t_temp.compressed_obj_length;
-			mem2d = cudaMalloc ((void**) &cu_object_array, sizeof (MAPTYPE) * size_of_obj_array);
-			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc ((void**)&cu_object_array, sizeof(MAPTYPE)*qv_object_array.size()):Error message=%s\n", cudaGetErrorString (mem2d));
-				clearMemory( ); return ErrorAllocateMemoryGPU;
-			}
-			printf("cu_object_array - allocated, size = %d\n", size_of_obj_array);
-			mem2d = cudaMalloc ((void**) &cu_energy_table_n_best, sizeof (float) * n_best_elements);
-			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc((void**)&cu_energy_table_n_best, sizeof(float)*n_best_elements):Error message=%s\n", cudaGetErrorString (mem2d));
-				clearMemory (); return ErrorAllocateMemoryGPU;
-			}
-			printf("cu_energy_table_n_best - allocated, size = %d\n", n_best_elements);
-			mem2d = cudaMalloc ((void**) &cu_best_ids, sizeof (int) * n_best_elements);
-			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMalloc((void**)&cu_best_ids, sizeof(int)*n_best_elements):Error message=%s\n", cudaGetErrorString (mem2d));
-				clearMemory (); return ErrorAllocateMemoryGPU;
-			}
-			printf("cu_best_ids - allocated, size = %d\n", n_best_elements);
-		}
+		
+		// Get number of all values in each vector in vec_object_array (size of cu_object_array)
+		template_params t_temp = templates_param_hash.value (vec_object_array.size () - 1);
+		int size_of_obj_array = t_temp.object_shift + t_temp.compressed_obj_length;
+
+		mem2d = cudaMalloc ((void**) &cu_object_array, sizeof (MAPTYPE) * size_of_obj_array);
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), ErrorAllocateMemoryGPU, __FILE__, __LINE__); } ;
+		fprintf_s (stderr, "cu_object_array - allocated, size = %d\n", size_of_obj_array);
+
+		mem2d = cudaMalloc ((void**) &cu_energy_table_n_best, sizeof (float) * n_best_elements);
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), ErrorAllocateMemoryGPU, __FILE__, __LINE__); } ;
+		fprintf_s (stderr, "cu_energy_table_n_best - allocated, size = %d\n", n_best_elements);
+
+		mem2d = cudaMalloc ((void**) &cu_best_ids, sizeof (int) * n_best_elements);
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), ErrorAllocateMemoryGPU, __FILE__, __LINE__); } ;
+		fprintf_s (stderr, "cu_best_ids - allocated, size = %d\n", n_best_elements);
 	}
 	this->is_memory_allocated = true;
-	printf ("is_memory_allocated = true\n");
+	// fprintf_s (stderr, "is_memory_allocated = true\n");
 	return 0;
 }
 
-int cu_fly_object_classifier::copy_data_to_GPU(bool recopy_force) {
+int cu_fly_object_classifier::copy_data_to_GPU (bool recopy_force) {
 	if (is_data_copyed && recopy_force) {
-		printf("recopy_force\n");
-		this->clearMemory();
+		// fprintf_s (stderr, "recopy_force\n");
+		this->clearMemory ();
 		is_memory_allocated = false;
-		this->allocate_memory_on_GPU();
-		this->copy_data_to_GPU();
-	} else if (is_data_copyed) {
-		printf("Data was already copied on GPU\n");
+		this->allocate_memory_on_GPU ();
+		this->copy_data_to_GPU ();
+	} 
+	else if (is_data_copyed) {
+		fprintf_s (stderr, "Data was already copied on GPU\n");
 		return ErrorCopyMemoryGPU;
-	} else {
+	}
+	else {
 		cudaError_t mem2d;
 		template_params *temp_params = 0;
-		temp_params = listToArray (templates_param_hash.values() );
-		if(!temp_params) {
-			printf("temp_params == 0\n");
-			return -1;
-		}
-		mem2d = cudaMemcpy (cu_params_array, temp_params, 
-			sizeof (template_params)*templates_param_hash.size (), cudaMemcpyHostToDevice);
-		if( mem2d != cudaSuccess ) {
-			printf("Error:cudaMemcpy(cu_params_array, listToArray(templates_param_hash.values()),sizeof(template_params)*templates_param_hash.size(), cudaMemcpyHostToDevice): Error message=%s\n", 
-				cudaGetErrorString(mem2d));
-			clearMemory( );	return ErrorCopyMemoryGPU;      
-		} ;
-		printf("cu_params_array - copyed, size = %d\n", templates_param_hash.size () );
-		delete[] temp_params;
-		/* if (cudaFreeHost (temp_params) != cudaSuccess) {
-			printf ("Error: cudaFreeHost (temp_params)\n");
-			return -1;
-		}*/
+		temp_params = listToArray (templates_param_hash.values ());
+		if (! temp_params) { handle_error ("copy_data_to_GPU: temp_params == 0", -1, __FILE__, __LINE__); } ;
 
-		if (UseIntensity) {
-			MAPTYPE *obj_array = 0;
-			int obj_array_size;
-			// int obj_array_size = vecvecToArray(obj_array, qv_object_array);
-			obj_array = vecvecToArray (qv_object_array, &obj_array_size); // Uses cudaHostAlloc call
-			if(obj_array==0) {
-				printf("obj_array==0\n");
-				return -1;
-			}
-			printf("obj_array_size = %d\n", obj_array_size );
-			mem2d = cudaMemcpy( cu_object_array, obj_array, 
-				sizeof (MAPTYPE) * obj_array_size, cudaMemcpyHostToDevice);
-			if( mem2d != cudaSuccess ) {
-				printf("Error:cudaMemcpy (cu_object_array, obj_array, sizeof(MAPTYPE)*obj_array_size, cudaMemcpyHostToDevice): Error message=%s\n", 
-					cudaGetErrorString (mem2d) );
-				clearMemory ( );	return ErrorCopyMemoryGPU;      
-			} ;
-			printf("cu_object_array - copyed, size = %d\n", obj_array_size );
-			// delete[] obj_array;
-			if (cudaFreeHost (obj_array) != cudaSuccess) {
-				printf ("Error: cudaFreeHost (obj_array)\n");
-				return -1;
-			}
-		}
+		mem2d = cudaMemcpy (cu_params_array, temp_params, sizeof (template_params) * templates_param_hash.size (), cudaMemcpyHostToDevice);
+		if(mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), ErrorCopyMemoryGPU, __FILE__, __LINE__); } ;
+		// fprintf_s (stderr, "cu_params_array - copyed, size = %d\n", templates_param_hash.size ());
+		delete[] temp_params;
+
+		MAPTYPE *obj_array = 0;
+		int obj_array_size;
+		obj_array = vecvecToArray (vec_object_array, &obj_array_size); // Uses cudaHostAlloc call
+		if (obj_array == 0) { handle_error ("copy_data_to_GPU: obj_array == 0", -1, __FILE__, __LINE__); } ;
+		// fprintf_s (stderr, "obj_array_size = %d\n", obj_array_size );
+
+		mem2d = cudaMemcpy (cu_object_array, obj_array, sizeof (MAPTYPE) * obj_array_size, cudaMemcpyHostToDevice);
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), ErrorCopyMemoryGPU, __FILE__, __LINE__); } ;
+		// fprintf_s (stderr, "cu_object_array - copyed, size = %d\n", obj_array_size);
+		if (cudaFreeHost (obj_array) != cudaSuccess) { handle_error ("copy_data_to_GPU: cudaFreeHost (obj_array)", -1, __FILE__, __LINE__);	} ;
 	}
-	
 	this->is_data_copyed = true;
-	printf("is_data_copyed = true\n");
+	// fprintf_s (stderr, "is_data_copyed = true\n");
 	return 0;
 }
 
-// Store n best elements only
-/*int estimate_similarity_rx_ry_n_elements_eigen_rot_Nicodim_dist(QImage const & img) {
-	QVector<float> temp_energies; // store n best energies
-	
-	// find nearest templates by w/h ratio
-	QImage img_eig = rotate_to_horizontal(img);
-	QRect rect = find_non_zero_rect(img_eig); img_eig = img_eig.copy(rect);
+int cu_fly_object_classifier::alloc_data_on_gpu_run (int img_width, int img_height) {
+	cudaError_t mem2d;
 
-	QVector<int> work_templates = get_nearest_templates(templates_param_hash, img_eig.size(), template_similarity);
-	printf("get_nearest_templates - ok!, work_templates.size() = %d\n", work_templates.size() );
-
-	// calc contour integral and (or) integral under object
-	for(int i_template = 0; i_template < work_templates.size(); ++i_template) {
-		if(img_eig.width() == 0) {	printf("Division by zero - empty gradient image!\n"); return 0;}	
-		
-		float scale = float(templates_param_hash.value( work_templates[i_template]).w) / float (img_eig.width() );
-		QImage scaled_img = im_scale_c(img_eig, scale);
-		
-		int tid = work_templates[i_template];
-		
-		for(int k=0;k < 360; k += 180) {// step_rot_Z) {
-			QImage rotated_img = im_rotate_c_2( scaled_img, k * double(M_PI) / double(180) );
-			
-			for( int ii=(-roi_h); ii <= roi_h; ii+=step_r) {
-				for( int jj=(-roi_w); jj <= roi_w; jj+=step_r) {
-
-					long double sum = nikodim_distance( rotated_img, qv_object_array[tid], templates_param_hash.value(tid).w, jj, ii);
-					
-					float old_best_energy = temp_energies.isEmpty() ? FLT_MAX : temp_energies.last();
-					if( sum < old_best_energy ) { // search min distance
-						float low_energy = append_and_pop( temp_energies, this->n_best_elements, sum);
-						energy_hash_table.insert( qMakePair( tid, k),  float(sum) );
-						if(temp_energies.size() >= this->n_best_elements-1) {
-							remove_low_energy( this->energy_hash_table, low_energy);
-						}
-					}
-					// append info about image to auxiliary vector: id
-				}
-			}
-		}
+	mem2d = cudaMalloc ((void**)&cu_indices_of_fittest, sizeof (int) * work_templates.size ());
+	if( mem2d != cudaSuccess ) {
+		fprintf_s (stderr, "Error:cudaMalloc( (void**)&cu_indices_of_fittest, sizeof(int)*work_templates.size():Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory ( ); return -1;
 	}
-	return 0;
-}*/
 
-static int iter_counter = 0;
+	mem2d = cudaMalloc ((void**)&cu_energy_table, sizeof (float) * (work_templates.size () * (2 * roi_h / step_r) * (2 * roi_w / step_r)));
+	if (mem2d != cudaSuccess) {
+		fprintf_s (stderr, "Error:cudaMalloc( (void**)&cu_energy_table, sizeof(float)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r):Error message=%s\n", cudaGetErrorString (mem2d));
+		clearMemory (); return -1;
+	}
+	// fprintf_s (stderr, "cu_energy_table - allocated, size = %d\n", work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) );
+
+	mem2d = cudaMalloc ((void**)&cu_rotation, sizeof (int) * (work_templates.size () * (2 * roi_h / step_r) * (2 * roi_w / step_r)));
+	if( mem2d != cudaSuccess ) {
+		fprintf_s (stderr, "Error:cudaMalloc( (void**)&cu_rotation, sizeof(int)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r):Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory (); return -1;
+	}
+	// fprintf_s (stderr, "cu_rotation - allocated, size = %d\n", work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) );
+
+	mem2d = cudaMalloc ((void**)&cu_img_array, sizeof (IMGTYPE) * (img_width * img_height));
+	if( mem2d != cudaSuccess ) {
+		fprintf_s (stderr, "Error:cudaMalloc( (void**)&cu_img_array, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ):Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory (); return -1;
+	}
+	// fprintf_s (stderr, "cu_img_array - allocated, size = %d\n", (input_scaled_img.width () * input_scaled_img.height () ) );
+
+	mem2d = cudaMalloc ((void**)&cu_img_array_upsd, sizeof (IMGTYPE) * (img_width * img_height));
+	if( mem2d != cudaSuccess ) {
+		fprintf_s (stderr, "Error:cudaMalloc( (void**)&cu_img_array_upsd, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ):Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory (); return -1;
+	}
+	// fprintf_s (stderr, "cu_img_array_upsd - allocated, size = %d\n", (input_scaled_img.width () * input_scaled_img.height () ) );
+	return 0;
+}
+
+int cu_fly_object_classifier::copy_data_to_gpu_run (QImage const& scaled_img) {
+	cudaError_t mem2d;
+
+	mem2d = cudaMemcpy (cu_indices_of_fittest, work_templates.data(), sizeof (int) * work_templates.size (), cudaMemcpyHostToDevice);
+	if( mem2d != cudaSuccess ) {
+		fprintf_s (stderr, "Error:cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof(int) * work_templates.size(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString (mem2d) );
+		clearMemory ( ); return -1;      
+	} ;
+
+	IMGTYPE *img_array = new IMGTYPE[scaled_img.width () * scaled_img.height ()];
+	IMGTYPE *img_array_upsd = new IMGTYPE[scaled_img.width () * scaled_img.height ()];
+	if (convert_qimage_to_array (img_array, scaled_img)) return -1;
+		if (! img_array) { handle_error ("estimate_similarity: img_array == 0", __FILE__, __LINE__); }
+	
+	mem2d = cudaMemcpy (cu_img_array, img_array, sizeof (IMGTYPE) * scaled_img.width () * scaled_img.height (), cudaMemcpyHostToDevice);
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), __FILE__, __LINE__); };
+	
+	// img_rotate (img_array_upsd, scaled_img.width (), scaled_img.height (), img_array, scaled_img.width (), scaled_img.height (), M_PI);
+	img_rotate_upsd (img_array_upsd, img_array, scaled_img.width (), scaled_img.height ());
+
+	mem2d = cudaMemcpy (cu_img_array_upsd, img_array_upsd, sizeof (IMGTYPE) *  scaled_img.width () *  scaled_img.height (), cudaMemcpyHostToDevice);
+		if (mem2d != cudaSuccess) { handle_error (cudaGetErrorString (mem2d), __FILE__, __LINE__); };
+
+	delete[] img_array;
+	delete[] img_array_upsd;
+
+	return 0;
+}
 
 int cu_fly_object_classifier::estimate_similarity (QImage const& img) { // recognition
-	// printf ("cu_fly_object_classifier::estimate_similarity\n");
 	if (img.width () == 0 || img.height () == 0) {
-		printf ("Error: cu_fly_object_classifier::estimate_similarity: empty input image\n");
-		clearMemory ();
+		fprintf_s (stderr, "Warning: cu_fly_object_classifier::estimate_similarity: scaled_img is Empty ()\n");
+		return -1;
+	}	//	{ return handle_error ("estimate_similarity: empty input image", __FILE__, __LINE__); } ;
+	int the_best_id = 0;
+	
+	// Rotate input image by eigenvalues, fit in the closest rectangle, scale to commomn height
+	QImage scaled_img;
+	if (evaluate_input_img (scaled_img, img) != 0) {
+		fprintf_s (stderr, "Warning: cu_fly_object_classifier::estimate_similarity: scaled_img is Empty ()\n");
+		return -1;
+	}	//return handle_error ("estimate_similarity: evaluate_input_img failed", __FILE__, __LINE__); };
+
+	// scaled_img.save ("scaled_img.jpg");
+
+	// Wrappers for GPU memory operation to support CPU only interface
+	if (! this->is_memory_allocated) {this->allocate_memory_on_GPU ();} 
+	if (! this->is_data_copyed) {this->copy_data_to_GPU ();}
+
+	confine_templates_by_width (scaled_img.width ());
+
+	if (! work_templates.isEmpty ()) {
+		if (alloc_data_on_gpu_run (scaled_img.width (), scaled_img.height ()) != 0) { return handle_error ("estimate_similarity: alloc_data_on_gpu_run failed", __FILE__, __LINE__); };
+		if (copy_data_to_gpu_run (scaled_img) != 0) { return handle_error ("estimate_similarity: copy_data_to_gpu_run failed", __FILE__, __LINE__); };
+	
+		if (run_estimation (scaled_img) != 0) { return handle_error ("estimate_similarity: run_estimation failed", __FILE__, __LINE__); };
+	
+		if (copy_data_to_cpu_run () != 0) { return handle_error ("estimate_similarity: copy_data_to_cpu_run failed", __FILE__, __LINE__); };
+
+		// fprintf_s (stderr, "The result is %f\n", energy_table[0] );
+		int the_index = best_ids[0] / ((2 * roi_h / step_r) * (2 * roi_w / step_r));
+		// fprintf_s (stderr, "The index = %d", the_index);
+		the_best_id = work_templates[the_index];
+		// fprintf_s (stderr, "The id is %d\n", the_best_id);
+		// fprintf_s (stderr, "Angles are: x = %f, y = %f, z = %d\n", templates_param_hash.value (the_best_id).angleX, templates_param_hash.value (the_best_id).angleY, 0); // 180*if_rotated[0] );
+	}
+	else {
+		fprintf_s (stderr, "Warning: cu_fly_object_classifier::estimate_similarity: work_templates.isEmpty ()\n");
 		return -1;
 	}
 
-	QVector<float> temp_energies (n_best_elements); // store n best energies
-	// Rotate input image according eigenvalues
-	QImage img_eig = rotate_to_horizontal (img, &input_img_tilt);
+	return the_best_id;
+}
+
+int cu_fly_object_classifier::evaluate_input_img (QImage & out_scaled_img, QImage const& img) {
+	// Rotate input image according to eigenvalues
+	QImage img_eig = rotate_to_horizontal (img, &input_img_tilt); // input_img_tilt is member 
+	img_eig.save ("img_eig.jpg");
+	// Fit in smallest rectangle
 	QRect rect = find_non_zero_rect (img_eig);
-	if (rect.isEmpty ()) {
-		printf ("Error: rect.isEmpty\n");
-		clearMemory ();
-		return -1;
-	}
+	if (rect.isEmpty ()) { fprintf_s (stderr, "Error: evaluate_input_img: rect.isEmpty ()\n"); return -1; };	// handle_error ("estimate_similarity: rect.isEmpty", __FILE__, __LINE__); }
 	img_eig = img_eig.copy (rect);
-	
-	if (img_eig.width () == 0 || img_eig.height () == 0) {
-		printf ("Error: cu_fly_object_classifier::estimate_similarity: empty img_eig image\n");
-		clearMemory ();
-		return -1;
-	}
+	img_eig.save ("img_eig_fit.jpg");
+	// img_eig.save ("img_eig_fit.bmp");
+	// Usage of handle_error is reason why this is member function
+	if (img_eig.width () && img_eig.height () == 0) { fprintf_s (stderr, "Error: evaluate_input_img: img_eig is Empty ()\n"); return -1; };	// return handle_error ("estimate_similarity: empty img_eig image", __FILE__, __LINE__); }
 
 	double scale = (double) COMMON_HEIGHT / (double) img_eig.height ();
-	QImage input_scaled_img = im_scale_c (img_eig, scale);
-	// QBitArray img_mask = image_to_bits (input_scaled_img, 8, 8, (float)BIT_MASK_DIFF);
-	ImgDataArray img_data_ar;
-	img_data_ar.data = input_scaled_img.bits ();
-	img_data_ar.w = input_scaled_img.width ();
-	img_data_ar.h = input_scaled_img.height ();
-	img_data_ar.bpl = input_scaled_img.bytesPerLine ();
+	out_scaled_img = im_scale_c (img_eig, scale);
 
-	double *hu_mom_img = hu_moments (&img_data_ar);
-	// printf ("%.20f %.20f %.20f %.20f %.20f %.20f %.20f", hu_mom_img[0], hu_mom_img[1], hu_mom_img[2], hu_mom_img[3], hu_mom_img[4], hu_mom_img[5], hu_mom_img[6]);
+	return 0;
+}
 
-	// input_scaled_img.save ("temp/input_scaled.bmp");
-
-	// test temp!
-	// img_eig.save (QString("temp/%1_input_img_eig.bmp").arg(iter_counter));
-	// input_scaled_img.save (QString("temp/%1_input_scaled.bmp").arg(iter_counter));
-	// iter_counter++;
-
-	// Cover GPU memory operation to support CPU only interface
-	if( ! this->is_memory_allocated) {this->allocate_memory_on_GPU ();} 
-	if( ! this->is_data_copyed) {this->copy_data_to_GPU ();}
-
-	// Find nearest templates by w/h ratio
-	// QVector<int> work_templates = get_nearest_templates (templates_param_hash, input_scaled_img.size(), template_similarity);
-	// QVector<int> work_templates = get_nearest_templates_hw_and_mask (templates_param_hash, input_scaled_img.size(), img_mask, template_similarity);
-	QVector<int> work_templates = get_nearest_templates_hw_hu (templates_param_hash, input_scaled_img.size(), hu_mom_img, template_similarity);
-	delete[] hu_mom_img;
-	// printf("get_nearest_templates - ok!, work_templates.size() = %d\n", work_templates.size () );
-
-	cudaError_t mem2d;
-	// Allocate and copy memory on GPU for indices of fittest and for returning energy values
-	mem2d = cudaMalloc ( (void**)&cu_indices_of_fittest, sizeof (int)*(work_templates.size () ) );
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_indices_of_fittest, sizeof(int)*work_templates.size():Error message=%s\n", cudaGetErrorString (mem2d) );
-		clearMemory ( ); return -1;
-	}
-	// printf("cu_indices_of_fittest - allocated, size = %d\n", work_templates.size () );
-
-	mem2d = cudaMalloc ( (void**)&cu_energy_table, sizeof (float)*(work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) ) );
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_energy_table, sizeof(float)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r):Error message=%s\n", cudaGetErrorString (mem2d) );
-		clearMemory ( ); return -1;
-	}
-	// printf("cu_energy_table - allocated, size = %d\n", work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) );
-
-	mem2d = cudaMalloc ( (void**)&cu_rotation, sizeof (int)*(work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) ) );
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_rotation, sizeof(int)*(work_templates.size()*(2*roi_h/step_r)*(2*roi_w/step_r):Error message=%s\n", cudaGetErrorString (mem2d) );
-		clearMemory ( ); return -1;
-	}
-	// printf("cu_rotation - allocated, size = %d\n", work_templates.size ()*(2*roi_h/step_r)*(2*roi_w/step_r) );
-
-	mem2d = cudaMalloc ( (void**)&cu_img_array, sizeof(IMGTYPE)*(input_scaled_img.width() * input_scaled_img.height () ) );
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_img_array, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ):Error message=%s\n", cudaGetErrorString (mem2d) );
-		clearMemory ( ); return -1;
-	}
-	// printf("cu_img_array - allocated, size = %d\n", (input_scaled_img.width () * input_scaled_img.height () ) );
-
-	mem2d = cudaMalloc ( (void**)&cu_img_array_upsd, sizeof(IMGTYPE)*(input_scaled_img.width() * input_scaled_img.height () ) );
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMalloc( (void**)&cu_img_array_upsd, sizeof(IMGTYPE)*(img_eig.width() * img_eig.height() ):Error message=%s\n", cudaGetErrorString (mem2d) );
-		clearMemory ( ); return -1;
-	}
-	// printf("cu_img_array_upsd - allocated, size = %d\n", (input_scaled_img.width () * input_scaled_img.height () ) );
-
-	mem2d = cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof (int) * work_templates.size (), cudaMemcpyHostToDevice);
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMemcpy( cu_indices_of_fittest, work_templates.data(), sizeof(int) * work_templates.size(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString (mem2d) );
-		clearMemory( ); return -1;      
-	} ;
-	// printf("cu_indices_of_fittest - copyed, size = %d\n", work_templates.size() );
-	/*if(work_templates.data()!=0)
-		if( cu_base::copy_dataToGPU( cu_indices_of_fittest, (int*)work_templates.data(), sizeof(int) * work_templates.size() ) ) { clearMemory( ); return ErrorCopyMemoryGPU;}
-	else
-		printf("work_templates.data()==0\n");*/
-	IMGTYPE * img_array = 0;
-	img_array = new IMGTYPE [input_scaled_img.width () * input_scaled_img.height ()];
-	/*if (cudaHostAlloc ((void**)&img_array, input_scaled_img.width () * input_scaled_img.height () * sizeof (*img_array), cudaHostAllocDefault | cudaHostAllocWriteCombined) != cudaSuccess ) {
-		printf ("Error: cudaHostAlloc ((void**)&img_array, input_scaled_img.width () * input_scaled_img.height () * sizeof (img_array), cudaHostAllocDefault)\n");
-		return -1;
-	}*/
-
-	if( convert_qimage_to_array (img_array, input_scaled_img) ) return -1;
-	if(!img_array) {
-		printf("img_array == 0;\n");
-		clearMemory( ); return -1;
-	}
-	mem2d = cudaMemcpy (cu_img_array, img_array, sizeof(IMGTYPE) * input_scaled_img.width () * input_scaled_img.height (), cudaMemcpyHostToDevice);
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMemcpy( cu_img_array, img_array, sizeof(IMGTYPE) * img_eig.width() * img_eig.height(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString(mem2d) );
-		clearMemory( ); return -1;      
-	} ;
-	// printf("cu_img_array - copyed, size = %d\n", input_scaled_img.width() * input_scaled_img.height() );
-
-	// rotate by 180 degree
-	img_rotate (img_array, input_scaled_img.width (), input_scaled_img.height (), img_array, input_scaled_img.width (), input_scaled_img.height (), M_PI);
-
-	QImage temp_qimg = im_rotate (input_scaled_img, 180);
-	if( convert_qimage_to_array (img_array, temp_qimg) ) return -1;
-	convert_array_to_qimage (temp_qimg, img_array);
-	// temp_qimg.save ("rotated.bmp");
-
-	mem2d = cudaMemcpy( cu_img_array_upsd, img_array, sizeof(IMGTYPE) * input_scaled_img.width () * input_scaled_img.height (), cudaMemcpyHostToDevice);
-	if( mem2d != cudaSuccess ) {
-		printf("Error:cudaMemcpy( cu_img_array_upsd, img_array, sizeof(IMGTYPE) * img_eig.width() * img_eig.height(), cudaMemcpyHostToDevice): Error message=%s\n", cudaGetErrorString(mem2d) );
-		clearMemory( ); return -1;      
-	} ;
-	// printf("cu_img_array_upsd - copyed, size = %d\n", input_scaled_img.width() * input_scaled_img.height() );
-	delete[] img_array;
-	/*if (cudaFreeHost (img_array) != cudaSuccess) {
-		printf ("Error: cudaFreeHost (img_array)\n");
-		return -1;
-	}*/
-
-	unsigned int img_obj_area = areaBW (input_scaled_img);
-	
+int cu_fly_object_classifier::run_estimation (QImage const& input_scaled_img) {
 	int NUM_BLOCK_X = 1;
-	int NUM_BLOCK_Y = work_templates.size();
-    int NUM_THREAD_X = (2*roi_h/step_r)*(2*roi_w/step_r);
+	int NUM_BLOCK_Y = work_templates.size ();
+    int NUM_THREAD_X = (2 * roi_h / step_r) * (2 * roi_w / step_r);
 	int NUM_THREAD_Y = 1;
 
 	QTime RunTimer;  // Timer
-	RunTimer.start ( ) ;
+	RunTimer.start () ;
+
+	unsigned int img_obj_area = areaBW (input_scaled_img);
+	// fprintf_s (stderr, "img_obj_area = %d\n", img_obj_area);
 
 	estimate_nicodim_metric_wrapper (NUM_BLOCK_X, NUM_BLOCK_Y, NUM_THREAD_X, NUM_THREAD_Y,
 		cu_img_array, cu_img_array_upsd, input_scaled_img.width (), input_scaled_img.height (), img_obj_area,
 		cu_object_array, cu_params_array, cu_indices_of_fittest, roi_w, roi_h, step_r, 
 		cu_energy_table, cu_rotation, cu_energy_table_n_best, cu_best_ids, n_best_elements);
 
-	fprintf (stdout, "Time of run func call = %lf seconds\n", double (RunTimer.elapsed( ) ) / 1000. ) ;
+	// fprintf_s (stdout, "Time of run func call = %lf seconds\n", double (RunTimer.elapsed ()) / 1000.) ;
 
+	return 0;
+}
+
+int cu_fly_object_classifier::copy_data_to_cpu_run () {
 	energy_table.resize (n_best_elements);
 	best_ids.resize (n_best_elements);
 	if_rotated.resize (n_best_elements);
 
-	mem2d = cudaMemcpy (energy_table.data (), cu_energy_table_n_best, sizeof (float) * n_best_elements, cudaMemcpyDeviceToHost);
+	fprintf_s (stderr, "n_best_elements = %d\n", n_best_elements);
+
+	cudaError_t mem2d = cudaMemcpy (energy_table.data (), cu_energy_table_n_best, sizeof (float) * n_best_elements, cudaMemcpyDeviceToHost);
 	if (mem2d != cudaSuccess) {
-		printf ("Error:cudaMemcpy (energy_table.data (), cu_energy_table_n_best, sizeof (float) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString(mem2d) );
+		fprintf_s (stderr, "Error:cudaMemcpy (energy_table.data (), cu_energy_table_n_best, sizeof (float) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString (mem2d));
 		clearMemory ( ); return -1;      
 	} ;
 	mem2d = cudaMemcpy (best_ids.data (), cu_best_ids, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost);
 	if (mem2d != cudaSuccess) {
-		printf ("Error:cudaMemcpy (best_ids.data (), cu_best_ids, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString(mem2d) );
+		fprintf_s (stderr, "Error:cudaMemcpy (best_ids.data (), cu_best_ids, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString (mem2d));
 		clearMemory ( ); return -1;
 	} ;
 	mem2d = cudaMemcpy (if_rotated.data (), cu_rotation, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost);
 	if (mem2d != cudaSuccess) {
-		printf ("Error:cudaMemcpy (if_rotated.data (), cu_rotation, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString(mem2d) );
+		fprintf_s (stderr, "Error:cudaMemcpy (if_rotated.data (), cu_rotation, sizeof (int) * n_best_elements, cudaMemcpyDeviceToHost): Error message=%s\n", cudaGetErrorString (mem2d));
 		clearMemory ( ); return -1;
 	} ;
-	// printf ("if_rotated - copyed back to CPU, size = %d\n", n_best_elements );
 
-	// printf ("The result is %f\n", energy_table[0] );
-	int the_index = best_ids [0] / ( (2*roi_h/step_r)*(2*roi_w/step_r) );
-	// printf("The index = %d", the_index);
-	int the_best_id = work_templates [ the_index ];
-	// printf ("The id is %d\n", the_best_id );
-	// printf ("Angles are: x = %f, y = %f, z = %d\n", templates_param_hash.value (the_best_id).angleX, templates_param_hash.value (the_best_id).angleY, 0); // 180*if_rotated[0] );
-
-	return the_best_id;
-}
-/*int cu_fly_object_classifier::append_template(QImage img, int model_id, float angleX, float angleY, float angleZ) {
-	img = rotate_to_horizontal(img);
-	// img.save(QString("D:/projects/TOUCH/fly_run/temp/templates_fit_rot_enhance/t_%1_%2_%3_eig.bmp").arg(angleX).arg(angleY).arg(angleZ) );
-	QRect rect = find_non_zero_rect(img);
-	// rect.setCoords(rect.x()-2, rect.y()-2, rect.width()+4, rect.height()+4 );
-	// enhance_rectangle( rect, 2, img.rect() );
-	img = img.copy(rect);
-	// img.save(QString("D:/projects/TOUCH/fly_run/temp/templates_fit_rot_enhance/t_%1_%2_%3.bmp").arg(angleX).arg(angleY).arg(angleZ) );
-	
-	int compressed_obj_length = 0;
-	if(UseIntensity) {
-		// compress (from sparse to compact representation) // store object only
-		// append compressed template
-		qv_object_array.append(compress_sparse_image(img));
-		compressed_obj_length = qv_object_array.last().size();
-	}
-
-	// int tid = templates_param_vector.size()+1; // id of template
-	int tid = templates_param_hash.size(); // id of template
-
-	// append to vector of templates
-	// templates_param_vector.push_back(template_params(tid, angleX, angleY, angleZ, img.width(), img.height(), contour_length ));
-	templates_param_hash.insert(tid, template_params(tid, angleX, angleY, angleZ, img.width(), img.height(), 0, compressed_obj_length ));
-
-	// sort by width/height ratio
-	// qSort( templates_param_vector.begin(), templates_param_vector.end(), compare_wh_ratio);
-	
 	return 0;
-} */
+}
+
+
 
 /*
-void remove_low_energy(QHash<int, QPair<int, float>  > &map, float low_element) {
-	// remove element with too small energy value from the energy_map
-	QList<int>	keys = map.keys( qMakePair( k,  low_element));
-	for(int i=0;i<keys.size();++i) {
-		QHash<int, QPair<int, float> >::iterator iter = map.find(keys[i]);
-		while(iter!=map.end() && iter.key()==keys[i]) {
-			if(iter.value()==qMakePair( k,  low_element)) {
-				iter = map.erase(iter); // remove
-			}
-			else {
-				++iter;
-			}
+	QDir dir (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ()));
+	if (! dir.exists ()) {
+		if (! dir.mkdir (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ()))) {
+			fprintf_s (stderr, "Can't create dir %s!\n", (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1").arg (scaled_t_img.width ())).toStdString ().c_str ());
+			return -1;
 		}
-	}		
-}
-*/
-
-/*QHash<QObject *, int> objectHash;
-...
-QHash<QObject *, int>::iterator i = objectHash.find(obj);
-while (i != objectHash.end() && i.key() == obj) {
-	if (i.value() == 0) {
-		i = objectHash.erase(i);
-	} else {
-		++i;
 	}
-}
+	QDir dir2 (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1/%2").arg (scaled_t_img.width ()).arg (model_n));
+	if (! dir2.exists ()) {
+		if (! dir2.mkdir (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1/%2").arg (scaled_t_img.width ()).arg (model_n))) {
+			fprintf_s (stderr, "Can't create dir %s!\n", (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1/%2").arg (scaled_t_img.width ()).arg (model_n)).toStdString ().c_str ());
+			return -1;
+		}
+	}
+	scaled_t_img.save (QString ("D:/projects/TOUCH/fly_video_cu_copter/temp/templates/%1/%2/t_%3_%4_%5.png").arg (scaled_t_img.width ()).arg (model_n).arg (angleX).arg (angleY).arg (angleZ));
 
-QList<int>	keys = energy_map.keys( qMakePair( k,  bad_energy));
-for(int i=0;i<keys.size();++i) {
-	energy_map.remove(keys[i]);
-}*/
+*/
